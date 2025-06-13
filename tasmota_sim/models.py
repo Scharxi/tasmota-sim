@@ -79,7 +79,7 @@ class DockerComposeService:
                 "DEVICE_ID": self.device_id,
                 "DEVICE_NAME": self.name,
                 "DEVICE_IP": self.ip_address,
-                "AMQP_URL": "amqp://guest:guest@rabbitmq:5672/",
+                "AMQP_URL": "amqp://admin:admin123@rabbitmq:5672/",
                 **self.environment
             },
             "ports": [
