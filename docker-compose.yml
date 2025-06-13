@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: tasmota-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      tasmota_net:
+        ipv4_address: 172.25.0.10
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  tasmota-cli:
+    build: .
+    container_name: tasmota-cli
+    depends_on:
+      - rabbitmq
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - tasmota_net
+    stdin_open: true
+    tty: true
+    environment:
+      - RABBITMQ_HOST=172.25.0.10
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASS=admin123
+
+networks:
+  tasmota_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+volumes:
+  rabbitmq_data: 
