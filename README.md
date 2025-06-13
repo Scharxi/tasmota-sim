@@ -1,0 +1,226 @@
+# Tasmota Smart Plug Simulator
+
+Ein umfassendes Simulationssystem für Tasmota Smart Plugs mit RabbitMQ-Messaging und Docker-Hosting.
+
+## 🚀 Schnellstart
+
+### Option 1: Lokale CLI + Docker Services (Empfohlen)
+
+**Schritt 1: Lokale CLI Installation**
+
+```bash
+# Windows
+install-local.bat
+
+# Linux/macOS
+./install-local.sh
+
+# Oder manuell
+pip install -e .
+```
+
+**Schritt 2: Docker Services starten**
+
+```bash
+# Nur RabbitMQ und Device-Container (ohne CLI-Container)
+docker-compose -f docker-compose.services.yml up -d
+docker-compose -f docker-compose.override.yml up -d
+```
+
+**Schritt 3: CLI lokal verwenden**
+
+```bash
+# Hilfe anzeigen
+tasmota-sim --help
+
+# Geräte erstellen
+tasmota-sim create-devices --count 5
+
+# Gerätestatus abfragen
+tasmota-sim status kitchen_001
+
+# Gerät ein-/ausschalten
+tasmota-sim power kitchen_001 on
+tasmota-sim power kitchen_001 off
+
+# Energiedaten abfragen
+tasmota-sim energy kitchen_001
+```
+
+### Option 2: Alles in Docker (Original)
+
+```bash
+# Alle Services inklusive CLI-Container
+docker-compose up -d
+
+# CLI im Container verwenden
+docker-compose run --rm tasmota-cli python -m tasmota_sim.cli --help
+```
+
+## 🏗️ Architektur
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Lokale CLI    │    │   RabbitMQ      │    │ Device Container│
+│   (Ihr PC)      │◄──►│   (Docker)      │◄──►│   (Docker)      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+        │                        │                        │
+        │                        │                        │
+   ┌────▼────┐              ┌────▼────┐              ┌────▼────┐
+   │Commands │              │Message  │              │Telemetry│
+   │Controls │              │ Broker  │              │Status   │
+   └─────────┘              └─────────┘              └─────────┘
+```
+
+## 📋 Verfügbare CLI-Befehle
+
+| Befehl | Beschreibung | Beispiel |
+|--------|--------------|----------|
+| `create-devices` | Erstellt mehrere Device-Container | `tasmota-sim create-devices --count 5` |
+| `status` | Fragt Gerätestatus ab | `tasmota-sim status kitchen_001` |
+| `power` | Schaltet Gerät ein/aus | `tasmota-sim power kitchen_001 on` |
+| `energy` | Fragt Energiedaten ab | `tasmota-sim energy kitchen_001` |
+| `monitor` | Echzeit-Monitoring* | `tasmota-sim monitor` |
+| `docker-up` | Startet Docker Services | `tasmota-sim docker-up` |
+| `docker-down` | Stoppt Docker Services | `tasmota-sim docker-down` |
+| `list-devices` | Listet Device-Container | `tasmota-sim list-devices` |
+
+*Monitoring-Feature wird noch implementiert
+
+## 🔧 Konfiguration
+
+### Umgebungsvariablen
+
+```bash
+# Lokale CLI-Nutzung (Standard)
+export RABBITMQ_HOST=localhost
+export RABBITMQ_USER=admin
+export RABBITMQ_PASS=admin123
+
+# Docker-interne Nutzung
+export RABBITMQ_HOST=172.25.0.10
+export RABBITMQ_USER=admin
+export RABBITMQ_PASS=admin123
+```
+
+### RabbitMQ Management UI
+
+- **URL**: http://localhost:15672
+- **Benutzer**: admin
+- **Passwort**: admin123
+
+## 🌐 Netzwerk-Konfiguration
+
+- **RabbitMQ**: `172.25.0.10:5672` (intern), `localhost:5672` (extern)
+- **Device IPs**: `172.25.0.100` - `172.25.0.104`
+- **Subnet**: `172.25.0.0/16`
+
+## 💡 Nutzungsbeispiele
+
+### Basis-Setup
+
+```bash
+# 1. CLI installieren
+pip install -e .
+
+# 2. Services starten
+docker-compose -f docker-compose.services.yml up -d
+
+# 3. 5 Geräte erstellen
+tasmota-sim create-devices --count 5
+
+# 4. Geräte starten
+docker-compose -f docker-compose.override.yml up -d
+
+# 5. Geräte testen
+tasmota-sim status kitchen_001
+```
+
+### Erweiterte Nutzung
+
+```bash
+# Gerät einschalten und Status prüfen
+tasmota-sim power kitchen_001 on
+sleep 2
+tasmota-sim status kitchen_001
+
+# Energiedaten aller Geräte abfragen
+for i in {001..005}; do
+    tasmota-sim energy kitchen_$i
+done
+
+# Services überwachen
+docker-compose logs -f
+```
+
+## 📊 Features
+
+### ✅ Implementiert
+- **Realistische Device-Simulation** (15-85W Verbrauch)
+- **RabbitMQ Topic-Messaging** mit persistenten Nachrichten
+- **Individuelle Container-IPs** für jedes Gerät
+- **Lokale CLI-Nutzung** mit Docker-Services
+- **Asynchrone aio-pika** Implementierung für Stabilität
+- **Gestaffelte Starts** zur Vermeidung von Connection-Problemen
+- **Health Checks** für RabbitMQ
+
+### 🔄 In Entwicklung
+- **Echzeit-Monitoring Dashboard** mit Rich-UI
+- **Web-basiertes Dashboard** für Device-Management
+- **Erweiterte Telemetrie** (Temperatur, Feuchtigkeit)
+- **Device-Gruppen** und Szenarien
+
+## 🐛 Troubleshooting
+
+### Häufige Probleme
+
+**CLI-Befehle funktionieren nicht**
+```bash
+# Prüfen ob CLI installiert ist
+tasmota-sim --help
+
+# Falls nicht, neu installieren
+pip install -e .
+```
+
+**Verbindung zu RabbitMQ fehlschlägt**
+```bash
+# RabbitMQ Status prüfen
+docker-compose -f docker-compose.services.yml ps
+
+# RabbitMQ neu starten
+docker-compose -f docker-compose.services.yml restart rabbitmq
+```
+
+**Devices starten nicht**
+```bash
+# Device-Logs prüfen
+docker-compose logs tasmota-device-1
+
+# Alle Services neu starten
+docker-compose down && docker-compose up -d
+```
+
+## 📦 Installation Details
+
+### Voraussetzungen
+- **Python 3.8+**
+- **Docker & Docker Compose**
+- **Git** (für Entwicklung)
+
+### Abhängigkeiten
+- `aio-pika>=9.4.0` - Asynchrones RabbitMQ
+- `click>=8.1.7` - CLI Framework
+- `pydantic>=2.5.0` - Datenvalidierung
+- `rich>=13.7.0` - Terminal-UI
+- `pyyaml>=6.0.1` - YAML-Konfiguration
+
+## 🔗 Verweise
+
+- **RabbitMQ Dokumentation**: https://www.rabbitmq.com/documentation.html
+- **Tasmota Projekt**: https://tasmota.github.io/docs/
+- **Docker Compose**: https://docs.docker.com/compose/
+
+---
+
+**💡 Tipp**: Nutzen Sie die lokale CLI für bessere Performance und Benutzerfreundlichkeit, während die Device-Container in Docker für Isolation sorgen! 
