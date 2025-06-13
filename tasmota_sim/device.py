@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from .models import TasmotaDeviceConfig, StatusResponse, TelemetryData, CommandMessage
+from .legacy_models import StatusResponse, TelemetryData, CommandMessage, TasmotaDeviceConfig
 from .messaging import AsyncTasmotaMessaging
 
 logger = logging.getLogger(__name__)
