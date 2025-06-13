@@ -12,7 +12,7 @@ import aio_pika
 from aio_pika import Message, ExchangeType, DeliveryMode
 from aio_pika.abc import AbstractConnection, AbstractChannel, AbstractExchange, AbstractQueue
 
-from .models import StatusResponse, TelemetryData, CommandMessage
+from .legacy_models import StatusResponse, TelemetryData, CommandMessage
 
 logger = logging.getLogger(__name__)
 

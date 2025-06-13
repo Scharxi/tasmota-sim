@@ -12,8 +12,12 @@ from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 import platform
+import ipaddress
 
 from .messaging import AsyncTasmotaMessaging
+from .database import TasmotaDatabase
+from .docker_generator import DockerComposeGenerator
+from .models import Device, Container
 
 console = Console()
 
@@ -26,9 +30,15 @@ def async_command(f):
     return wrapper
 
 @click.group()
-def cli():
+@click.option('--db-path', default='tasmota_devices.db', help='Path to SQLite database file')
+@click.pass_context
+def cli(ctx, db_path):
     """Tasmota Device Simulator CLI"""
-    pass
+    # Ensure context object exists
+    ctx.ensure_object(dict)
+    # Initialize database and store in context
+    ctx.obj['db'] = TasmotaDatabase(db_path)
+    ctx.obj['generator'] = DockerComposeGenerator(ctx.obj['db'])
 
 @cli.command()
 @click.argument('device_id')
@@ -287,16 +297,32 @@ def remove_ip_aliases(ip_addresses):
     return True
 
 @cli.command("setup-ip-aliases")
-@click.option('--count', default=3, help='Number of IP aliases to create (starting from 172.25.0.100)')
-@click.option('--base-ip', default='172.25.0.100', help='Base IP address to start from')
-def setup_ip_aliases_cmd(count, base_ip):
-    """Set up IP aliases for direct device access."""
-    # Parse base IP and generate list
-    ip_parts = base_ip.split('.')
-    base_num = int(ip_parts[3])
-    ip_prefix = '.'.join(ip_parts[:3])
+@click.option('--count', help='Number of IP aliases to create (starting from 172.25.0.100) - if not provided, uses database')
+@click.option('--base-ip', default='172.25.0.100', help='Base IP address to start from (only used with --count)')
+@click.pass_context
+def setup_ip_aliases_cmd(ctx, count, base_ip):
+    """Set up IP aliases for direct device access - uses database or manual count."""
+    db = ctx.obj['db']
     
-    ip_addresses = [f"{ip_prefix}.{base_num + i}" for i in range(count)]
+    if count is not None:
+        # Manual mode - use count and base_ip
+        try:
+            base_ip_obj = ipaddress.IPv4Address(base_ip)
+            base_ip_int = int(base_ip_obj)
+            ip_addresses = [str(ipaddress.IPv4Address(base_ip_int + i)) for i in range(count)]
+            console.print(f"[yellow]Setting up {count} IP aliases starting from {base_ip}...[/yellow]")
+        except ipaddress.AddressValueError:
+            console.print(f"[red]✗[/red] Invalid base IP address: {base_ip}")
+            return
+    else:
+        # Database mode - get IP addresses from database
+        ip_addresses = db.get_all_ip_addresses()
+        if not ip_addresses:
+            console.print("[yellow]No devices found in database. Use 'create-devices' first or specify --count.[/yellow]")
+            return
+        console.print(f"[yellow]Setting up {len(ip_addresses)} IP aliases from database...[/yellow]")
+        for ip in ip_addresses:
+            console.print(f"  - {ip}")
     
     if setup_ip_aliases_func(ip_addresses):
         console.print(f"\n[green]✓[/green] Successfully set up all IP aliases!")
@@ -305,16 +331,32 @@ def setup_ip_aliases_cmd(count, base_ip):
         console.print(f"\n[red]✗[/red] Some IP aliases failed to set up. Check permissions.")
 
 @cli.command("remove-ip-aliases") 
-@click.option('--count', default=3, help='Number of IP aliases to remove (starting from 172.25.0.100)')
-@click.option('--base-ip', default='172.25.0.100', help='Base IP address to start from')
-def remove_ip_aliases_cmd(count, base_ip):
-    """Remove IP aliases for device access."""
-    # Parse base IP and generate list
-    ip_parts = base_ip.split('.')
-    base_num = int(ip_parts[3])
-    ip_prefix = '.'.join(ip_parts[:3])
+@click.option('--count', help='Number of IP aliases to remove (starting from 172.25.0.100) - if not provided, uses database')
+@click.option('--base-ip', default='172.25.0.100', help='Base IP address to start from (only used with --count)')
+@click.pass_context
+def remove_ip_aliases_cmd(ctx, count, base_ip):
+    """Remove IP aliases for device access - uses database or manual count."""
+    db = ctx.obj['db']
     
-    ip_addresses = [f"{ip_prefix}.{base_num + i}" for i in range(count)]
+    if count is not None:
+        # Manual mode - use count and base_ip
+        try:
+            base_ip_obj = ipaddress.IPv4Address(base_ip)
+            base_ip_int = int(base_ip_obj)
+            ip_addresses = [str(ipaddress.IPv4Address(base_ip_int + i)) for i in range(count)]
+            console.print(f"[yellow]Removing {count} IP aliases starting from {base_ip}...[/yellow]")
+        except ipaddress.AddressValueError:
+            console.print(f"[red]✗[/red] Invalid base IP address: {base_ip}")
+            return
+    else:
+        # Database mode - get IP addresses from database
+        ip_addresses = db.get_all_ip_addresses()
+        if not ip_addresses:
+            console.print("[yellow]No devices found in database. Use --count if you want to remove specific aliases.[/yellow]")
+            return
+        console.print(f"[yellow]Removing {len(ip_addresses)} IP aliases from database...[/yellow]")
+        for ip in ip_addresses:
+            console.print(f"  - {ip}")
     
     if remove_ip_aliases(ip_addresses):
         console.print(f"\n[green]✓[/green] Successfully removed IP aliases!")
@@ -323,103 +365,135 @@ def remove_ip_aliases_cmd(count, base_ip):
 @cli.command("create-devices")
 @click.option('--count', default=3, help='Number of device containers to create')
 @click.option('--prefix', default='kitchen', help='Device name prefix')
-@click.option('--force', is_flag=True, help='Overwrite existing docker-compose.override.yml')
+@click.option('--room', help='Room/group name for devices')
+@click.option('--base-ip', default='172.25.0.100', help='Base IP address for devices')
+@click.option('--force', is_flag=True, help='Overwrite existing devices and docker-compose.override.yml')
 @click.option('--setup-ip-aliases', is_flag=True, help='Automatically set up IP aliases for direct access')
-def create_devices(count, prefix, force, setup_ip_aliases):
-    """Create multiple device containers with optional IP alias setup."""
+@click.pass_context
+def create_devices(ctx, count, prefix, room, base_ip, force, setup_ip_aliases):
+    """Create multiple device containers with database storage and docker-compose generation."""
+    db = ctx.obj['db']
+    generator = ctx.obj['generator']
+    
     override_file = Path("docker-compose.override.yml")
     
-    if override_file.exists() and not force:
-        console.print(f"[yellow]Warning:[/yellow] {override_file} already exists. Use --force to overwrite.")
+    # Check for existing devices if not forcing
+    existing_devices = db.list_devices()
+    if existing_devices and not force:
+        console.print(f"[yellow]Warning:[/yellow] {len(existing_devices)} devices already exist in database. Use --force to overwrite.")
+        console.print("Existing devices:")
+        for device in existing_devices:
+            console.print(f"  - {device.name} ({device.id}) at {device.ip_address}")
         return
     
     console.print(f"[yellow]Creating {count} device containers with prefix '{prefix}'...[/yellow]")
     
-    # Generate docker-compose override file
-    services = {}
-    base_ip = 100
+    # Clear existing data if force is used
+    if force and existing_devices:
+        console.print("[yellow]Removing existing devices from database...[/yellow]")
+        for device in existing_devices:
+            db.delete_container(device.id)
+            db.delete_device(device.id)
+        console.print(f"[green]✓[/green] Cleared {len(existing_devices)} existing devices")
+    
+    # Create room if specified
+    if room:
+        if db.create_room(room, f"Auto-created room for {prefix} devices"):
+            console.print(f"[green]✓[/green] Created room: {room}")
+    
+    # Parse base IP and create devices
+    try:
+        base_ip_obj = ipaddress.IPv4Address(base_ip)
+        base_ip_int = int(base_ip_obj)
+    except ipaddress.AddressValueError:
+        console.print(f"[red]✗[/red] Invalid base IP address: {base_ip}")
+        return
+    
+    created_devices = []
     ip_addresses = []
     
-    for i in range(1, count + 1):
-        device_id = f"{prefix}_{i:03d}"
-        container_name = f"tasmota-device-{i}"
-        ip_address = f"172.25.0.{base_ip + i - 1}"
-        ip_addresses.append(ip_address)
+    for i in range(count):
+        device_id = f"{prefix}_{i+1:03d}"
+        device_name = device_id
+        ip_address = str(ipaddress.IPv4Address(base_ip_int + i))
+        host_port = 8081 + i
+        service_name = f"device-{prefix}-{i+1:03d}"
         
-        services[container_name] = {
-            'build': '.',
-            'container_name': container_name,
-            'command': 'python3 /app/run_device.py',
-            'environment': [
-                'RABBITMQ_HOST=172.25.0.10',
-                'RABBITMQ_USER=admin',
-                'RABBITMQ_PASS=admin123',
-                f'DEVICE_ID={device_id}',
-                f'DEVICE_NAME={device_id}',
-                f'IP_ADDRESS={ip_address}',
-                f'CONTAINER_IP={ip_address}',
-                'DEFAULT_USERNAME=admin',
-                'DEFAULT_PASSWORD=test1234!',
-                'PORT=80'
-            ],
-            'networks': {
-                'tasmota_net': {
-                    'ipv4_address': ip_address
-                }
-            },
-            'ports': [
-                f"{ip_address}:80:80",  # Direct IP access
-                f"{8080 + i}:80"        # Localhost port access
-            ],
-            'restart': 'unless-stopped'
-        }
-    
-    # Create complete docker-compose override structure  
-    docker_compose = {
-        'networks': {
-            'tasmota_net': {
-                'driver': 'bridge',
-                'ipam': {
-                    'config': [
-                        {'subnet': '172.25.0.0/16'}
-                    ]
-                }
-            }
-        },
-        'services': services
-    }
-    
-    # Write the file
-    try:
-        with open(override_file, 'w') as f:
-            yaml.dump(docker_compose, f, default_flow_style=False, indent=2)
+        # Create device in database
+        device = Device(
+            id=device_id,
+            name=device_name,
+            room=room,
+            device_type='switch',
+            ip_address=ip_address,
+            port=80,
+            prefix=prefix,
+            status='created'
+        )
         
-        console.print(f"[green]✓[/green] Created {override_file} with {count} device containers")
-        console.print(f"[cyan]Device IDs:[/cyan] {prefix}_001 to {prefix}_{count:03d}")
-        console.print(f"[cyan]IP Range:[/cyan] 172.25.0.{base_ip} to 172.25.0.{base_ip + count - 1}")
-        console.print(f"[cyan]Web Ports:[/cyan] 8081 to {8080 + count}")
-        
-        # Setup IP aliases if requested
-        if setup_ip_aliases:
-            console.print(f"\n[yellow]Setting up IP aliases for direct access...[/yellow]")
-            setup_success = setup_ip_aliases_func(ip_addresses)
-            if setup_success:
-                console.print(f"[green]✓[/green] IP aliases configured successfully!")
+        if db.create_device(device):
+            created_devices.append(device)
+            ip_addresses.append(ip_address)
+            
+            # Create container mapping
+            container = Container(
+                device_id=device_id,
+                container_name=f"tasmota-device-{device_name}",
+                docker_service_name=service_name,
+                host_port=host_port,
+                device_name=device_name,
+                ip_address=ip_address
+            )
+            
+            if db.create_container(container):
+                console.print(f"[green]✓[/green] Created device: {device_name} ({ip_address}:{host_port})")
             else:
-                console.print(f"[yellow]⚠[/yellow] Some IP aliases failed. You can run 'tasmota-sim setup-ip-aliases --count {count}' later.")
-        
-        console.print("\n[yellow]Next steps:[/yellow]")
-        if not setup_ip_aliases:
-            console.print(f"1. Setup IP aliases: [cyan]tasmota-sim setup-ip-aliases --count {count}[/cyan]")
-            console.print("2. Start services: [cyan]docker-compose up -d[/cyan]")
+                console.print(f"[red]✗[/red] Failed to create container mapping for {device_name}")
         else:
-            console.print("1. Start services: [cyan]docker-compose up -d[/cyan]")
-        console.print("3. Test devices: [cyan]tasmota-sim status kitchen_001[/cyan]")
-        console.print(f"4. Test web interface: [cyan]http://{ip_addresses[0]}/docs[/cyan]")
-        console.print(f"5. Test direct IP access: [cyan]curl http://{ip_addresses[0]}[/cyan]")
-        
-    except Exception as e:
-        console.print(f"[red]✗[/red] Failed to create {override_file}: {e}")
+            console.print(f"[red]✗[/red] Failed to create device: {device_name}")
+    
+    if not created_devices:
+        console.print("[red]✗[/red] No devices were created")
+        return
+    
+    # Generate docker-compose.override.yml from database
+    console.print(f"[yellow]Generating docker-compose.override.yml from database...[/yellow]")
+    if generator.generate_override_file():
+        console.print(f"[green]✓[/green] Generated {override_file} with {len(created_devices)} device services")
+    else:
+        console.print("[red]✗[/red] Failed to generate docker-compose.override.yml")
+        return
+    
+    # Validate generated file
+    if generator.validate_generated_file():
+        console.print(f"[green]✓[/green] Docker-compose file validated successfully")
+    
+    # Setup IP aliases if requested
+    if setup_ip_aliases:
+        console.print(f"\n[yellow]Setting up IP aliases for direct access...[/yellow]")
+        setup_success = setup_ip_aliases_func(ip_addresses)
+        if setup_success:
+            console.print(f"[green]✓[/green] IP aliases configured successfully!")
+        else:
+            console.print(f"[yellow]⚠[/yellow] Some IP aliases failed. You can run 'tasmota-sim setup-ip-aliases' later.")
+    
+    # Show summary
+    console.print(f"\n[bold green]Created {len(created_devices)} devices:[/bold green]")
+    console.print(f"[cyan]Device IDs:[/cyan] {prefix}_001 to {prefix}_{count:03d}")
+    console.print(f"[cyan]IP Range:[/cyan] {ip_addresses[0]} to {ip_addresses[-1]}")
+    console.print(f"[cyan]Web Ports:[/cyan] 8081 to {8080 + count}")
+    if room:
+        console.print(f"[cyan]Room:[/cyan] {room}")
+    
+    console.print("\n[yellow]Next steps:[/yellow]")
+    if not setup_ip_aliases:
+        console.print("1. Setup IP aliases: [cyan]tasmota-sim setup-ip-aliases[/cyan]")
+        console.print("2. Start services: [cyan]docker-compose up -d[/cyan]")
+    else:
+        console.print("1. Start services: [cyan]docker-compose up -d[/cyan]")
+    console.print("3. Test devices: [cyan]tasmota-sim status kitchen_001[/cyan]")
+    console.print(f"4. Test web interface: [cyan]http://{ip_addresses[0]}/docs[/cyan]")
+    console.print(f"5. Test direct IP access: [cyan]curl http://{ip_addresses[0]}[/cyan]")
 
 @cli.command("docker-up")
 @click.option('--detach', '-d', is_flag=True, default=True, help='Run containers in detached mode')
@@ -505,66 +579,285 @@ def docker_down(volumes):
 
 @cli.command("list-devices")
 @click.option('--status', is_flag=True, help='Show running status')
-def list_devices(status):
-    """List device containers."""
+@click.option('--room', help='Filter by room')
+@click.option('--json', 'output_json', is_flag=True, help='Output as JSON')
+@click.pass_context
+def list_devices(ctx, status, room, output_json):
+    """List devices from database."""
+    import json
+    
+    db = ctx.obj['db']
+    
     try:
+        # Get devices from database
+        devices = db.list_devices(room=room)
+        
+        if not devices:
+            if room:
+                console.print(f"[yellow]No devices found in room '{room}'[/yellow]")
+            else:
+                console.print("[yellow]No devices found in database. Use 'create-devices' first.[/yellow]")
+            return
+        
+        if output_json:
+            # Output as JSON
+            device_data = []
+            for device in devices:
+                device_dict = {
+                    'id': device.id,
+                    'name': device.name,
+                    'room': device.room,
+                    'device_type': device.device_type,
+                    'ip_address': device.ip_address,
+                    'port': device.port,
+                    'status': device.status,
+                    'created_at': device.created_at,
+                    'last_seen': device.last_seen
+                }
+                device_data.append(device_dict)
+            
+            print(json.dumps(device_data, indent=2))
+            return
+        
+        # Display as table
+        console.print(f"[green]Devices in Database ({len(devices)} total):[/green]")
+        
+        table = Table()
+        table.add_column("Device ID")
+        table.add_column("Name")
+        table.add_column("Room")
+        table.add_column("Type")
+        table.add_column("IP Address")
+        table.add_column("Status")
+        table.add_column("Created")
+        
+        for device in devices:
+            # Color code status
+            status_color = {
+                'online': 'green',
+                'offline': 'red',
+                'created': 'yellow',
+                'unknown': 'dim'
+            }.get(device.status, 'white')
+            
+            table.add_row(
+                device.id,
+                device.name,
+                device.room or '-',
+                device.device_type,
+                device.ip_address or '-',
+                f"[{status_color}]{device.status}[/{status_color}]",
+                device.created_at[:19] if device.created_at else '-'  # Remove microseconds
+            )
+        
+        console.print(table)
+        
+        # Show container status if requested
         if status:
-            # Show container status
-            result = subprocess.run(['docker', 'ps', '-a', '--filter', 'name=tasmota-device'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                console.print("[green]Device Container Status:[/green]")
-                lines = result.stdout.strip().split('\n')
-                if len(lines) > 1:
-                    # Create table
-                    table = Table()
-                    headers = lines[0].split()
-                    for header in headers:
-                        table.add_column(header)
+            console.print("\n[green]Container Status:[/green]")
+            containers = db.get_containers()
+            
+            if containers:
+                container_table = Table()
+                container_table.add_column("Service Name")
+                container_table.add_column("Container Name")
+                container_table.add_column("Host Port")
+                container_table.add_column("Docker Status")
+                
+                for container in containers:
+                    # Check Docker container status
+                    try:
+                        result = subprocess.run(['docker', 'ps', '-a', '--filter', f'name={container.container_name}', '--format', 'table {{.Status}}'], 
+                                              capture_output=True, text=True)
+                        docker_status = "Unknown"
+                        if result.returncode == 0:
+                            lines = result.stdout.strip().split('\n')
+                            if len(lines) > 1:
+                                docker_status = lines[1]
+                    except:
+                        docker_status = "Error"
                     
-                    for line in lines[1:]:
-                        if 'tasmota-device' in line:
-                            table.add_row(*line.split())
-                    
-                    console.print(table)
-                else:
-                    console.print("[yellow]No device containers found[/yellow]")
+                    container_table.add_row(
+                        container.docker_service_name,
+                        container.container_name,
+                        str(container.host_port),
+                        docker_status
+                    )
+                
+                console.print(container_table)
             else:
-                console.print(f"[red]✗[/red] Error getting container status: {result.stderr}")
-        else:
-            # List configured devices from override file
-            override_file = Path("docker-compose.override.yml")
-            if override_file.exists():
-                with open(override_file, 'r') as f:
-                    config = yaml.safe_load(f)
-                
-                console.print("[green]Configured Device Containers:[/green]")
-                services = config.get('services', {})
-                
-                table = Table()
-                table.add_column("Container Name")
-                table.add_column("Device ID")
-                table.add_column("IP Address")
-                
-                for service_name, service_config in services.items():
-                    if 'tasmota-device' in service_name:
-                        env_vars = service_config.get('environment', [])
-                        device_id = ip_address = "Unknown"
-                        
-                        for env in env_vars:
-                            if env.startswith('DEVICE_ID='):
-                                device_id = env.split('=', 1)[1]
-                            elif env.startswith('IP_ADDRESS='):
-                                ip_address = env.split('=', 1)[1]
-                        
-                        table.add_row(service_name, device_id, ip_address)
-                
-                console.print(table)
-            else:
-                console.print("[yellow]No devices configured. Use 'create-devices' first.[/yellow]")
+                console.print("[yellow]No containers configured[/yellow]")
                 
     except Exception as e:
         console.print(f"[red]✗[/red] Error listing devices: {e}")
+
+
+# Database management commands
+@cli.command("db-stats")
+@click.pass_context
+def db_stats(ctx):
+    """Show database statistics."""
+    db = ctx.obj['db']
+    
+    try:
+        stats = db.get_database_stats()
+        
+        console.print("[green]Database Statistics:[/green]")
+        
+        table = Table()
+        table.add_column("Category")
+        table.add_column("Count")
+        
+        table.add_row("Total Devices", str(stats.get('total_devices', 0)))
+        table.add_row("Total Containers", str(stats.get('total_containers', 0)))
+        table.add_row("Total Rooms", str(stats.get('total_rooms', 0)))
+        table.add_row("Status Entries", str(stats.get('total_status_entries', 0)))
+        
+        # Device status breakdown
+        for key, value in stats.items():
+            if key.startswith('devices_'):
+                status = key.replace('devices_', '')
+                table.add_row(f"Devices ({status})", str(value))
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error getting database stats: {e}")
+
+
+@cli.command("regenerate-compose")
+@click.pass_context
+def regenerate_compose(ctx):
+    """Regenerate docker-compose.override.yml from database."""
+    db = ctx.obj['db']
+    generator = ctx.obj['generator']
+    
+    try:
+        containers = db.get_containers()
+        if not containers:
+            console.print("[yellow]No containers found in database. Use 'create-devices' first.[/yellow]")
+            return
+        
+        console.print(f"[yellow]Regenerating docker-compose.override.yml from {len(containers)} database entries...[/yellow]")
+        
+        if generator.generate_override_file():
+            console.print(f"[green]✓[/green] Successfully regenerated docker-compose.override.yml")
+            
+            if generator.validate_generated_file():
+                console.print(f"[green]✓[/green] Generated file validated successfully")
+        else:
+            console.print("[red]✗[/red] Failed to regenerate docker-compose.override.yml")
+            
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error regenerating compose file: {e}")
+
+
+@cli.command("sync-database")
+@click.option('--compose-file', default='docker-compose.override.yml', help='Docker compose file to sync from')
+@click.pass_context
+def sync_database(ctx, compose_file):
+    """Sync database with existing docker-compose file (for migration)."""
+    db = ctx.obj['db']
+    generator = ctx.obj['generator']
+    
+    try:
+        console.print(f"[yellow]Syncing database with {compose_file}...[/yellow]")
+        
+        if generator.sync_database_with_compose_file(compose_file):
+            console.print(f"[green]✓[/green] Successfully synced database with compose file")
+            
+            # Show stats after sync
+            stats = db.get_database_stats()
+            console.print(f"[cyan]Database now contains {stats.get('total_devices', 0)} devices and {stats.get('total_containers', 0)} containers[/cyan]")
+        else:
+            console.print("[red]✗[/red] Failed to sync database")
+            
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error syncing database: {e}")
+
+
+@cli.command("delete-device")
+@click.argument('device_id')
+@click.option('--force', is_flag=True, help='Skip confirmation prompt')
+@click.pass_context
+def delete_device(ctx, device_id, force):
+    """Delete a device from database and regenerate compose file."""
+    db = ctx.obj['db']
+    generator = ctx.obj['generator']
+    
+    try:
+        # Check if device exists
+        device = db.get_device(device_id)
+        if not device:
+            console.print(f"[red]✗[/red] Device '{device_id}' not found in database")
+            return
+        
+        # Confirm deletion
+        if not force:
+            console.print(f"[yellow]About to delete device:[/yellow]")
+            console.print(f"  ID: {device.id}")
+            console.print(f"  Name: {device.name}")
+            console.print(f"  IP: {device.ip_address}")
+            console.print(f"  Room: {device.room or 'None'}")
+            
+            if not click.confirm("Are you sure you want to delete this device?"):
+                console.print("[yellow]Deletion cancelled[/yellow]")
+                return
+        
+        # Delete container mapping first
+        if db.delete_container(device_id):
+            console.print(f"[green]✓[/green] Removed container mapping for {device_id}")
+        
+        # Delete device
+        if db.delete_device(device_id):
+            console.print(f"[green]✓[/green] Deleted device {device_id}")
+            
+            # Regenerate compose file
+            console.print("[yellow]Regenerating docker-compose.override.yml...[/yellow]")
+            if generator.generate_override_file():
+                console.print(f"[green]✓[/green] Updated docker-compose.override.yml")
+            else:
+                console.print("[yellow]⚠[/yellow] Failed to regenerate compose file")
+        else:
+            console.print(f"[red]✗[/red] Failed to delete device {device_id}")
+            
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error deleting device: {e}")
+
+
+@cli.command("list-rooms")
+@click.pass_context
+def list_rooms(ctx):
+    """List all rooms and their device counts."""
+    db = ctx.obj['db']
+    
+    try:
+        rooms = db.list_rooms()
+        
+        if not rooms:
+            console.print("[yellow]No rooms found in database[/yellow]")
+            return
+        
+        console.print(f"[green]Rooms in Database ({len(rooms)} total):[/green]")
+        
+        table = Table()
+        table.add_column("Room Name")
+        table.add_column("Description")
+        table.add_column("Device Count")
+        table.add_column("Created")
+        
+        for room in rooms:
+            table.add_row(
+                room['name'],
+                room['description'] or '-',
+                str(room['device_count']),
+                room['created_at'][:19] if room['created_at'] else '-'
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error listing rooms: {e}")
 
 @cli.command("docker-logs")
 @click.argument('service', required=False)

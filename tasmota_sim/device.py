@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from .models import TasmotaDeviceConfig, StatusResponse, TelemetryData, CommandMessage
+from .legacy_models import StatusResponse, TelemetryData, CommandMessage, TasmotaDeviceConfig
 from .messaging import AsyncTasmotaMessaging
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ def generate_device_config(device_id: str, device_name: str, ip_address: str) ->
         energy_consumption=random.uniform(15.0, 85.0) if random.choice([True, False]) else random.uniform(0.3, 0.8),
         total_energy=random.uniform(10.0, 1000.0),  # Previous total consumption
         firmware_version="12.5.0",
-        rabbitmq_host=os.getenv("RABBITMQ_HOST", "localhost"),
+        rabbitmq_host=os.getenv("RABBITMQ_HOST", "rabbitmq"),
         rabbitmq_user=os.getenv("RABBITMQ_USER", "admin"),
         rabbitmq_pass=os.getenv("RABBITMQ_PASS", "admin123")
     )
