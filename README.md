@@ -1,13 +1,58 @@
 # Tasmota Smart Plug Simulator
 
-Ein umfassendes Simulationssystem für Tasmota Smart Plugs mit RabbitMQ-Messaging und Docker-Hosting.
+Ein umfassendes Simulationssystem für Tasmota Smart Plugs mit RabbitMQ-Messaging, Web-Server und Docker-Hosting.
 
 ## 🚀 Schnellstart
 
-### Option 1: Lokale CLI + Docker Services (Empfohlen)
+### Option 1: Web-Server + Direkte IP-Steuerung (Neu & Empfohlen)
+
+**Schritt 1: Devices erstellen & IP-Aliase einrichten**
+```bash
+# CLI installieren (falls noch nicht geschehen)
+pip install -e .
+
+# Devices erstellen mit automatischen IP-Aliases
+tasmota-sim create-devices --count 3 --setup-ip-aliases
+```
+
+**Schritt 2: Container starten**
+```bash
+# Alle Services inkl. Web-Server starten
+docker-compose up -d
+```
+
+**Schritt 3: Devices testen**
+```bash
+# Über direkte IP-Adressen (wie echte Tasmota-Devices!)
+curl http://172.25.0.100  # Device 1 Status
+curl http://172.25.0.101  # Device 2 Status  
+curl http://172.25.0.102  # Device 3 Status
+
+# Oder über localhost-Ports
+curl http://localhost:8081  # Device 1
+curl http://localhost:8082  # Device 2
+curl http://localhost:8083  # Device 3
+
+# Tasmota-Commands senden
+curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20ON"
+curl -u admin:test1234! "http://172.25.0.101/cm?cmnd=Power%20OFF"
+curl -u admin:test1234! "http://172.25.0.102/cm?cmnd=Power%20TOGGLE"
+```
+
+**Schritt 4: Web-Interface nutzen**
+```bash
+# FastAPI Swagger-Dokumentation
+open http://localhost:8081/docs  # Device 1 API-Docs
+open http://localhost:8082/docs  # Device 2 API-Docs
+open http://localhost:8083/docs  # Device 3 API-Docs
+
+# Oder direkt über IP
+open http://172.25.0.100/docs
+```
+
+### Option 2: Lokale CLI + Docker Services
 
 **Schritt 1: Lokale CLI Installation**
-
 ```bash
 # Windows
 install-local.bat
@@ -20,7 +65,6 @@ pip install -e .
 ```
 
 **Schritt 2: Docker Services starten**
-
 ```bash
 # Nur RabbitMQ und Device-Container (ohne CLI-Container)
 docker-compose -f docker-compose.services.yml up -d
@@ -28,7 +72,6 @@ docker-compose -f docker-compose.override.yml up -d
 ```
 
 **Schritt 3: CLI lokal verwenden**
-
 ```bash
 # Hilfe anzeigen
 tasmota-sim --help
@@ -47,36 +90,77 @@ tasmota-sim power kitchen_001 off
 tasmota-sim energy kitchen_001
 ```
 
-### Option 2: Legacy Docker-Compose (Optional)
+## 🌐 Web-Server Features
 
+### 🎯 Verfügbare Endpunkte
+
+| Endpunkt | Beschreibung | Authentifizierung |
+|----------|--------------|-------------------|
+| `GET /` | Device-Status und Infos | Keine |
+| `GET /cm?cmnd=<command>` | Tasmota-Commands | Basic Auth |
+| `GET /docs` | FastAPI Swagger-UI | Keine |
+| `GET /openapi.json` | OpenAPI-Schema | Keine |
+
+### 🔐 Authentifizierung
+
+**Standard-Zugangsdaten:**
+- **Benutzer**: `admin`
+- **Passwort**: `test1234!`
+
+**Beispiele:**
 ```bash
-# Nur für Kompatibilität - verwendet docker-compose.yml
-docker-compose up -d rabbitmq
+# Ohne Auth - Status abfragen
+curl http://172.25.0.100
 
-# Dann lokale CLI nutzen (empfohlen)
-tasmota-sim --help
+# Mit Auth - Commands senden
+curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20ON"
+curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20OFF"
+curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20TOGGLE"
 ```
+
+### 🏠 Device-Zugriff
+
+**Drei Zugriffsmethoden verfügbar:**
+
+1. **Direkte IP-Adressen** (Realistisch, wie echte Tasmota-Devices):
+   - `http://172.25.0.100` → kitchen_001
+   - `http://172.25.0.101` → kitchen_002  
+   - `http://172.25.0.102` → kitchen_003
+
+2. **Localhost-Ports** (Entwicklerfreundlich):
+   - `http://localhost:8081` → kitchen_001
+   - `http://localhost:8082` → kitchen_002
+   - `http://localhost:8083` → kitchen_003
+
+3. **Container-zu-Container** (Automatisch im Docker-Netzwerk)
 
 ## 🏗️ Architektur
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Lokale CLI    │    │   RabbitMQ      │    │ Device Container│
-│   (Ihr PC)      │◄──►│   (Docker)      │◄──►│   (Docker)      │
+│   Web Browser   │    │   RabbitMQ      │    │ Device Container│
+│   HTTP Client   │◄──►│   (Docker)      │◄──►│ + Web Server    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
         │                        │                        │
         │                        │                        │
    ┌────▼────┐              ┌────▼────┐              ┌────▼────┐
-   │Commands │              │Message  │              │Telemetry│
-   │Controls │              │ Broker  │              │Status   │
+   │FastAPI  │              │Message  │              │Telemetry│
+   │Commands │              │ Broker  │              │Status   │
    └─────────┘              └─────────┘              └─────────┘
+
+┌─────────────────┐    ┌─────────────────┐
+│   Lokale CLI    │    │   Setup Scripts │
+│   (Optional)    │    │   IP-Aliase     │
+└─────────────────┘    └─────────────────┘
 ```
 
 ## 📋 Verfügbare CLI-Befehle
 
 | Befehl | Beschreibung | Beispiel |
 |--------|--------------|----------|
-| `create-devices` | Erstellt mehrere Device-Container | `tasmota-sim create-devices --count 5` |
+| `create-devices` | Erstellt Device-Container (mit IP-Alias Option) | `tasmota-sim create-devices --count 3 --setup-ip-aliases` |
+| `setup-ip-aliases` | Erstellt IP-Aliase für direkten Zugriff | `tasmota-sim setup-ip-aliases --count 3` |
+| `remove-ip-aliases` | Entfernt IP-Aliase | `tasmota-sim remove-ip-aliases --count 3` |
 | `status` | Fragt Gerätestatus ab | `tasmota-sim status kitchen_001` |
 | `power` | Schaltet Gerät ein/aus | `tasmota-sim power kitchen_001 on` |
 | `energy` | Fragt Energiedaten ab | `tasmota-sim energy kitchen_001` |
@@ -91,7 +175,17 @@ tasmota-sim --help
 
 *Monitoring-Feature wird noch implementiert
 
-## 🔧 Konfiguration
+## 🔧 Setup & Konfiguration
+
+### IP-Aliase Setup (Für direkte IP-Zugriffe)
+
+```bash
+# IP-Aliase erstellen (einmalig pro Shell-Session)
+./setup-ip-aliases.sh
+
+# IP-Aliase entfernen (optional)
+./remove-ip-aliases.sh
+```
 
 ### Umgebungsvariablen
 
@@ -105,6 +199,10 @@ export RABBITMQ_PASS=admin123
 export RABBITMQ_HOST=172.25.0.10
 export RABBITMQ_USER=admin
 export RABBITMQ_PASS=admin123
+
+# Web-Server Konfiguration
+export DEFAULT_USERNAME=admin
+export DEFAULT_PASSWORD=test1234!
 ```
 
 ### RabbitMQ Management UI
@@ -115,77 +213,137 @@ export RABBITMQ_PASS=admin123
 
 ## 🌐 Netzwerk-Konfiguration
 
+### Standard-Konfiguration
 - **RabbitMQ**: `172.25.0.10:5672` (intern), `localhost:5672` (extern)
-- **Device IPs**: `172.25.0.100` - `172.25.0.104`
+- **Device IPs**: `172.25.0.100`, `172.25.0.101`, `172.25.0.102`
+- **Web-Server Ports**: `8081`, `8082`, `8083` (extern)
 - **Subnet**: `172.25.0.0/16`
+
+### Port-Mapping
+| Container | Interne IP | Externe Ports | Web-Interface |
+|-----------|------------|---------------|---------------|
+| kitchen_001 | 172.25.0.100 | 8081→80 | http://localhost:8081 |
+| kitchen_002 | 172.25.0.101 | 8082→80 | http://localhost:8082 |
+| kitchen_003 | 172.25.0.102 | 8083→80 | http://localhost:8083 |
+| rabbitmq | 172.25.0.10 | 5672, 15672 | http://localhost:15672 |
 
 ## 💡 Nutzungsbeispiele
 
-### Basis-Setup
+### Web-Server Setup
+
+```bash
+# 1. IP-Aliase einrichten
+./setup-ip-aliases.sh
+
+# 2. Container starten
+docker-compose up -d
+
+# 3. Devices über Web-Interface testen
+curl http://172.25.0.100
+curl http://172.25.0.101  
+curl http://172.25.0.102
+
+# 4. Tasmota-Commands senden
+curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20ON"
+curl -u admin:test1234! "http://172.25.0.101/cm?cmnd=Power%20OFF"
+
+# 5. API-Dokumentation öffnen
+open http://172.25.0.100/docs
+```
+
+### CLI-basierte Nutzung
 
 ```bash
 # 1. CLI installieren
 pip install -e .
 
-# 2. Services starten
-docker-compose -f docker-compose.services.yml up -d
+# 2. Geräte erstellen (mit automatischen IP-Aliases)
+tasmota-sim create-devices --count 3 --setup-ip-aliases
 
-# 3. 5 Geräte erstellen
-tasmota-sim create-devices --count 5
+# 3. Services starten
+docker-compose up -d
 
-# 4. Geräte starten
-docker-compose -f docker-compose.override.yml up -d
-
-# 5. Geräte testen
+# 4. Geräte testen
 tasmota-sim status kitchen_001
+
+# Oder IP-Aliases manuell verwalten:
+tasmota-sim setup-ip-aliases --count 3     # Erstellen
+tasmota-sim remove-ip-aliases --count 3    # Entfernen
 ```
 
-### Erweiterte Nutzung
+### Erweiterte Web-Server-Nutzung
 
 ```bash
-# Gerät einschalten und Status prüfen
-tasmota-sim power kitchen_001 on
-sleep 2
-tasmota-sim status kitchen_001
-
-# Energiedaten aller Geräte abfragen
-for i in {001..005}; do
-    tasmota-sim energy kitchen_$i
+# Alle Devices gleichzeitig steuern
+for ip in 172.25.0.100 172.25.0.101 172.25.0.102; do
+    curl -u admin:test1234! "http://$ip/cm?cmnd=Power%20ON"
 done
 
-# Docker Services verwalten
-tasmota-sim docker-status                    # Status aller Container
-tasmota-sim docker-logs rabbitmq -f         # RabbitMQ-Logs verfolgen
-tasmota-sim docker-logs --all               # Alle Service-Logs
-tasmota-sim docker-restart tasmota-device-1 # Einzelnen Container neu starten
-tasmota-sim docker-restart --all            # Alle Services neu starten
-tasmota-sim list-devices --status           # Device-Container-Status
+# Status aller Devices abfragen
+for ip in 172.25.0.100 172.25.0.101 172.25.0.102; do
+    echo "Device $ip:"
+    curl http://$ip | jq
+done
 
-# Cleanup und Wartung
-tasmota-sim docker-clean                    # Aufräumen
-tasmota-sim docker-down -v                  # Alles stoppen + Volumes löschen
+# Container-Management
+docker-compose logs -f tasmota-device-1  # Logs verfolgen
+docker-compose restart tasmota-device-2  # Einzelnen Container neu starten
+docker-compose down && docker-compose up -d  # Alle Container neu starten
 ```
 
 ## 📊 Features
 
 ### ✅ Implementiert
-- **Realistische Device-Simulation** (15-85W Verbrauch)
-- **RabbitMQ Topic-Messaging** mit persistenten Nachrichten
-- **Individuelle Container-IPs** für jedes Gerät
-- **Lokale CLI-Nutzung** mit Docker-Services
-- **Asynchrone aio-pika** Implementierung für Stabilität
-- **Gestaffelte Starts** zur Vermeidung von Connection-Problemen
-- **Health Checks** für RabbitMQ
+- **🌐 FastAPI Web-Server** mit Swagger-UI für jedes Device
+- **🏠 Direkte IP-Steuerung** wie echte Tasmota-Devices
+- **🔐 HTTP Basic Authentication** für Tasmota-Commands
+- **📡 Realistische Device-Simulation** (15-85W Verbrauch)
+- **🐰 RabbitMQ Topic-Messaging** mit persistenten Nachrichten
+- **🖥️ Individuelle Container-IPs** für jedes Gerät
+- **⚡ Asynchrone aio-pika & uvicorn** für hohe Performance
+- **🔧 Setup-Scripts** für automatische IP-Alias-Konfiguration
+- **📊 Health Checks** für RabbitMQ und Web-Server
 
 ### 🔄 In Entwicklung
-- **Echzeit-Monitoring Dashboard** mit Rich-UI
-- **Web-basiertes Dashboard** für Device-Management
-- **Erweiterte Telemetrie** (Temperatur, Feuchtigkeit)
-- **Device-Gruppen** und Szenarien
+- **📈 Echzeit-Monitoring Dashboard** mit Rich-UI
+- **🎛️ Web-basiertes Dashboard** für Device-Management
+- **🌡️ Erweiterte Telemetrie** (Temperatur, Feuchtigkeit)
+- **👥 Device-Gruppen** und Szenarien
+- **🔄 WebSocket-Support** für Realtime-Updates
 
 ## 🐛 Troubleshooting
 
 ### Häufige Probleme
+
+**Web-Server nicht erreichbar**
+```bash
+# Container-Status prüfen
+docker-compose ps
+
+# Logs anzeigen
+docker-compose logs tasmota-device-1
+
+# IP-Aliase prüfen
+ifconfig lo0 | grep 172.25
+```
+
+**"Can't assign requested address" Fehler**
+```bash
+# IP-Aliase müssen vor Container-Start erstellt werden
+docker-compose down
+./setup-ip-aliases.sh
+docker-compose up -d
+```
+
+**Authentifizierung fehlschlägt**
+```bash
+# Korrekte Zugangsdaten verwenden
+curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20ON"
+
+# Base64-Encoding manuell (alternativ)
+echo -n "admin:test1234!" | base64
+curl -H "Authorization: Basic YWRtaW46dGVzdDEyMzQh" "http://172.25.0.100/cm?cmnd=Power%20ON"
+```
 
 **CLI-Befehle funktionieren nicht**
 ```bash
@@ -199,42 +357,23 @@ pip install -e .
 **Verbindung zu RabbitMQ fehlschlägt**
 ```bash
 # RabbitMQ Status prüfen
-docker-compose -f docker-compose.services.yml ps
+docker-compose ps rabbitmq
 
 # RabbitMQ neu starten
-docker-compose -f docker-compose.services.yml restart rabbitmq
+docker-compose restart rabbitmq
 ```
 
-**Devices starten nicht**
+**IP-Aliase funktionieren nicht**
 ```bash
-# Device-Logs prüfen
-tasmota-sim docker-logs tasmota-device-1
+# Aliase prüfen
+ifconfig lo0 | grep 172.25
 
-# Container-Status prüfen
-tasmota-sim list-devices --status
+# Aliase neu erstellen
+./remove-ip-aliases.sh
+./setup-ip-aliases.sh
 
-# Einzelnen Container neu starten
-tasmota-sim docker-restart tasmota-device-1
-
-# Alle Services neu starten
-tasmota-sim docker-down && tasmota-sim docker-up
-```
-
-**Docker-Probleme beheben**
-```bash
-# Container-Status überprüfen
-tasmota-sim docker-status
-
-# Alle Logs anzeigen
-tasmota-sim docker-logs --all
-
-# Docker-Ressourcen bereinigen
-tasmota-sim docker-clean
-
-# Kompletter Neustart mit Cleanup
-tasmota-sim docker-down -v
-tasmota-sim docker-clean --force
-tasmota-sim docker-up
+# macOS: Manchmal Neustart erforderlich
+sudo dscacheutil -flushcache
 ```
 
 ## 📦 Installation Details
@@ -243,20 +382,29 @@ tasmota-sim docker-up
 - **Python 3.8+**
 - **Docker & Docker Compose**
 - **Git** (für Entwicklung)
+- **Admin-Rechte** (für IP-Alias-Setup)
 
 ### Abhängigkeiten
+- `fastapi>=0.104.0` - Web-Framework
+- `uvicorn>=0.24.0` - ASGI Server
 - `aio-pika>=9.4.0` - Asynchrones RabbitMQ
 - `click>=8.1.7` - CLI Framework
 - `pydantic>=2.5.0` - Datenvalidierung
 - `rich>=13.7.0` - Terminal-UI
 - `pyyaml>=6.0.1` - YAML-Konfiguration
 
+### Setup-Scripts
+- `setup-ip-aliases.sh` - Erstellt IP-Aliase für direkte Device-Zugriffe
+- `remove-ip-aliases.sh` - Entfernt IP-Aliase
+- `install-local.sh` / `install-local.bat` - CLI-Installation
+
 ## 🔗 Verweise
 
 - **RabbitMQ Dokumentation**: https://www.rabbitmq.com/documentation.html
 - **Tasmota Projekt**: https://tasmota.github.io/docs/
+- **FastAPI Dokumentation**: https://fastapi.tiangolo.com/
 - **Docker Compose**: https://docs.docker.com/compose/
 
 ---
 
-**💡 Tipp**: Nutzen Sie die lokale CLI für bessere Performance und Benutzerfreundlichkeit, während die Device-Container in Docker für Isolation sorgen! 
+**💡 Tipp**: Nutzen Sie die Web-Server-Funktionalität für realistische Tasmota-Device-Simulation oder die lokale CLI für Bulk-Operationen und Entwicklung! 
