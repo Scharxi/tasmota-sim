@@ -53,7 +53,6 @@ class TasmotaDevice:
         self.is_running = True
         
         # Start background tasks
-        self._consumer_task = asyncio.create_task(self._start_consuming())
         self._status_task = asyncio.create_task(self._status_publisher())
         self._telemetry_task = asyncio.create_task(self._telemetry_publisher())
         
@@ -63,7 +62,9 @@ class TasmotaDevice:
     async def _start_consuming(self):
         """Start consuming messages from RabbitMQ."""
         try:
+            logger.info(f"Device {self.config.device_id} starting message consumer...")
             await self.messaging.start_consuming(self._handle_command)
+            logger.info(f"Device {self.config.device_id} consumer task completed")
         except Exception as e:
             logger.error(f"Error in message consumer for device {self.config.device_id}: {e}")
 
@@ -155,7 +156,16 @@ class TasmotaDevice:
 
     async def _handle_command(self, command: CommandMessage):
         """Handle incoming commands."""
-        logger.info(f"Device {self.config.device_id} received command: {command.command}")
+        try:
+            logger.info(f"Device {self.config.device_id} received command: {command.command}")
+            print(f"PRINT: Processing command in _handle_command: {command.command}", flush=True)
+            logger.info(f"Processing command in _handle_command: {command.command}")
+            print(f"PRINT: Command object: {command}", flush=True)
+            logger.info(f"Command object: {command}")
+        except Exception as e:
+            logger.error(f"Error in _handle_command start: {e}")
+            print(f"PRINT ERROR: {e}", flush=True)
+            return
         
         try:
             if command.command == "power_on":
@@ -168,6 +178,7 @@ class TasmotaDevice:
                 await self._publish_status()
             elif command.command == "status":
                 # Send immediate status response
+                logger.info(f"Device {self.config.device_id} attempting to publish status...")
                 await self._publish_status()
                 logger.info(f"Device {self.config.device_id} sent status response")
             elif command.command == "energy":
@@ -199,7 +210,7 @@ class TasmotaDevice:
         self.is_running = False
         
         # Cancel background tasks
-        for task in [self._status_task, self._telemetry_task, self._consumer_task]:
+        for task in [self._status_task, self._telemetry_task]:
             if task and not task.done():
                 task.cancel()
                 try:
