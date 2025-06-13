@@ -1,0 +1,2 @@
+[console_scripts]
+tasmota-sim = tasmota_sim.cli:cli
