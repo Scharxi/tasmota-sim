@@ -22,23 +22,6 @@ services:
       retries: 5
       start_period: 30s
 
-  tasmota-cli:
-    build: .
-    container_name: tasmota-cli
-    depends_on:
-      - rabbitmq
-    volumes:
-      - .:/app
-    working_dir: /app
-    networks:
-      - tasmota_net
-    stdin_open: true
-    tty: true
-    environment:
-      - RABBITMQ_HOST=172.25.0.10
-      - RABBITMQ_USER=admin
-      - RABBITMQ_PASS=admin123
-
 networks:
   tasmota_net:
     driver: bridge
