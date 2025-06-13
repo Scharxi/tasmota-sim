@@ -1,5 +1,5 @@
 """
-Tasmota device simulator with improved async messaging.
+Tasmota device simulator with improved async messaging and realistic power consumption.
 """
 
 import asyncio
@@ -12,11 +12,12 @@ from typing import Optional
 
 from .legacy_models import StatusResponse, TelemetryData, CommandMessage, TasmotaDeviceConfig
 from .messaging import AsyncTasmotaMessaging
+from .power_profiles import power_profile_manager, DeviceCategory
 
 logger = logging.getLogger(__name__)
 
 class TasmotaDevice:
-    """Simulates a Tasmota smart device with async messaging."""
+    """Simulates a Tasmota smart device with async messaging and realistic power consumption."""
 
     def __init__(self, config: TasmotaDeviceConfig):
         self.config = config
@@ -31,10 +32,96 @@ class TasmotaDevice:
         self.is_running = False
         self._energy_accumulator = 0.0
         
+        # Initialize realistic power profile
+        self._setup_power_profile()
+        
         # Background task handles
         self._status_task: Optional[asyncio.Task] = None
         self._telemetry_task: Optional[asyncio.Task] = None
         self._consumer_task: Optional[asyncio.Task] = None
+    
+    def _setup_power_profile(self):
+        """Setup realistic power profile for the device."""
+        # Try to determine device category from device name
+        device_name = self.config.device_name.lower()
+        category = None
+        profile_name = None
+        
+        # Smart categorization based on device name
+        if any(keyword in device_name for keyword in ['lamp', 'light', 'beleuchtung', 'led', 'bulb']):
+            category = DeviceCategory.LIGHTING
+            if 'led' in device_name or 'smart' in device_name:
+                profile_name = "Smart Lampe"
+            elif 'halogen' in device_name:
+                profile_name = "Halogen Lampe"
+            else:
+                profile_name = "LED Lampe"
+                
+        elif any(keyword in device_name for keyword in ['heater', 'heizung', 'radiator', 'heating']):
+            category = DeviceCategory.HEATING
+            if 'lüfter' in device_name or 'fan' in device_name:
+                profile_name = "Heizlüfter"
+            elif 'infrarot' in device_name or 'infrared' in device_name:
+                profile_name = "Infrarotheizer"
+            else:
+                profile_name = "Heizkörper"
+                
+        elif any(keyword in device_name for keyword in ['coffee', 'kaffee', 'toaster', 'kettle', 'wasserkocher']):
+            category = DeviceCategory.APPLIANCE_SMALL
+            if 'coffee' in device_name or 'kaffee' in device_name:
+                profile_name = "Kaffeemaschine"
+            elif 'kettle' in device_name or 'wasserkocher' in device_name:
+                profile_name = "Wasserkocher"
+            else:
+                profile_name = "Toaster"
+                
+        elif any(keyword in device_name for keyword in ['microwave', 'mikrowelle', 'fridge', 'kühlschrank', 'dishwasher', 'geschirrspüler']):
+            category = DeviceCategory.APPLIANCE_LARGE
+            if 'microwave' in device_name or 'mikrowelle' in device_name:
+                profile_name = "Mikrowelle"
+            elif 'fridge' in device_name or 'kühlschrank' in device_name:
+                profile_name = "Kühlschrank"
+            else:
+                profile_name = "Geschirrspüler"
+                
+        elif any(keyword in device_name for keyword in ['tv', 'computer', 'pc', 'monitor', 'router', 'modem']):
+            category = DeviceCategory.ELECTRONICS
+            if 'tv' in device_name or 'fernseher' in device_name:
+                profile_name = "TV LED"
+            elif any(keyword in device_name for keyword in ['computer', 'pc', 'desktop']):
+                profile_name = "Computer Desktop"
+            elif 'router' in device_name or 'modem' in device_name:
+                profile_name = "Router/Modem"
+                
+        elif any(keyword in device_name for keyword in ['washing', 'waschmaschine', 'vacuum', 'staubsauger', 'fan', 'ventilator']):
+            category = DeviceCategory.MOTOR
+            if 'washing' in device_name or 'waschmaschine' in device_name:
+                profile_name = "Waschmaschine"
+            elif 'vacuum' in device_name or 'staubsauger' in device_name:
+                profile_name = "Staubsauger"
+            else:
+                profile_name = "Ventilator"
+                
+        elif any(keyword in device_name for keyword in ['camera', 'kamera', 'hub', 'sensor']):
+            category = DeviceCategory.ALWAYS_ON
+            if 'camera' in device_name or 'kamera' in device_name:
+                profile_name = "Überwachungskamera"
+            else:
+                profile_name = "Smart Hub"
+        
+        # Assign power profile
+        profile = power_profile_manager.assign_profile_to_device(
+            self.config.device_id, 
+            profile_name=profile_name, 
+            category=category
+        )
+        
+        # Set initial power state based on profile
+        initial_power = power_profile_manager.get_device_power_consumption(self.config.device_id)
+        self.config.energy_consumption = initial_power
+        
+        logger.info(f"Device {self.config.device_id} assigned profile: {profile.name} ({profile.category.value})")
+        logger.info(f"Initial power consumption: {initial_power:.1f}W")
 
     async def start(self):
         """Start the device simulator."""
@@ -145,14 +232,18 @@ class TasmotaDevice:
             logger.warning(f"Failed to publish telemetry for device {self.config.device_id}")
 
     def _update_energy(self):
-        """Update total energy consumption based on current power state."""
-        if self.config.power_state:
-            # Calculate energy consumed since last update
-            time_diff = (datetime.now() - self.last_telemetry).total_seconds() / 3600  # hours
-            energy_consumed = self.config.energy_consumption * time_diff / 1000  # kWh
-            
-            self.config.total_energy += energy_consumed
-            self._energy_accumulator += energy_consumed
+        """Update total energy consumption using realistic power profiles."""
+        # Get current power consumption from power profile manager
+        current_power = power_profile_manager.get_device_power_consumption(self.config.device_id)
+        self.config.energy_consumption = current_power
+        
+        # Get total energy from power profile manager
+        total_energy_from_profile = power_profile_manager.get_device_total_energy(self.config.device_id)
+        
+        # If profile manager has tracked energy, use it; otherwise keep existing total
+        if total_energy_from_profile > 0:
+            self.config.total_energy = total_energy_from_profile
+            self._energy_accumulator = total_energy_from_profile
 
     async def _handle_command(self, command: CommandMessage):
         """Handle incoming commands."""
@@ -192,17 +283,19 @@ class TasmotaDevice:
             logger.error(f"Error handling command {command.command}: {e}")
 
     def _set_power_state(self, state: bool):
-        """Set device power state and update energy consumption."""
+        """Set device power state and update realistic energy consumption."""
         self.config.power_state = state
         
-        if state:
-            # Random consumption between 15-85W when on
-            self.config.energy_consumption = random.uniform(15.0, 85.0)
-        else:
-            # Standby consumption ~0.5W
-            self.config.energy_consumption = random.uniform(0.3, 0.8)
+        # Update power state in profile manager and get realistic consumption
+        new_consumption = power_profile_manager.set_device_power_state(self.config.device_id, state)
+        self.config.energy_consumption = new_consumption
         
-        logger.info(f"Device {self.config.device_id} power state changed to {state}, consumption: {self.config.energy_consumption:.1f}W")
+        # Get device info for logging
+        device_info = power_profile_manager.get_device_info(self.config.device_id)
+        profile_name = device_info.get('profile_name', 'Unknown')
+        
+        logger.info(f"Device {self.config.device_id} ({profile_name}) power state changed to {state}")
+        logger.info(f"Realistic power consumption: {new_consumption:.1f}W")
 
     async def stop(self):
         """Stop the device simulator."""
@@ -223,16 +316,30 @@ class TasmotaDevice:
         logger.info(f"Device {self.config.device_id} stopped")
 
 def generate_device_config(device_id: str, device_name: str, ip_address: str) -> TasmotaDeviceConfig:
-    """Generate a realistic device configuration."""
+    """Generate a realistic device configuration with smart power profiling."""
     import os
+    
+    # Create a temporary power profile manager to get initial values
+    temp_profile_manager = power_profile_manager
+    
+    # Pre-assign a profile to get realistic initial values
+    profile = temp_profile_manager.assign_profile_to_device(device_id, category=None)
+    
+    # Get initial power consumption
+    initial_power = temp_profile_manager.get_device_power_consumption(device_id)
+    initial_energy = temp_profile_manager.get_device_total_energy(device_id)
+    
+    # If no energy tracked yet, use a random historical value
+    if initial_energy == 0:
+        initial_energy = random.uniform(5.0, 500.0)  # Realistic historical consumption
     
     return TasmotaDeviceConfig(
         device_id=device_id,
         device_name=device_name,
         ip_address=ip_address,
         power_state=random.choice([True, False]),
-        energy_consumption=random.uniform(15.0, 85.0) if random.choice([True, False]) else random.uniform(0.3, 0.8),
-        total_energy=random.uniform(10.0, 1000.0),  # Previous total consumption
+        energy_consumption=initial_power,
+        total_energy=initial_energy,
         firmware_version="12.5.0",
         rabbitmq_host=os.getenv("RABBITMQ_HOST", "rabbitmq"),
         rabbitmq_user=os.getenv("RABBITMQ_USER", "admin"),
