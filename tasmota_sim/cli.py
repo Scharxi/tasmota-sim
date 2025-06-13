@@ -11,6 +11,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 from pathlib import Path
+import platform
 
 from .messaging import AsyncTasmotaMessaging
 
@@ -209,13 +210,123 @@ async def energy(device_id, no_wait):
     finally:
         await messaging.close()
 
+def get_ip_alias_commands(ip_addresses):
+    """Get platform-specific commands for IP alias management."""
+    system = platform.system().lower()
+    
+    if system == "darwin":  # macOS
+        setup_commands = [f"sudo ifconfig lo0 alias {ip} up" for ip in ip_addresses]
+        remove_commands = [f"sudo ifconfig lo0 -alias {ip}" for ip in ip_addresses]
+    elif system == "linux":
+        setup_commands = [f"sudo ip addr add {ip}/32 dev lo" for ip in ip_addresses]
+        remove_commands = [f"sudo ip addr del {ip}/32 dev lo" for ip in ip_addresses]
+    else:  # Windows
+        setup_commands = [f"netsh interface ipv4 add address \"Loopback Pseudo-Interface 1\" {ip} 255.255.255.255" for ip in ip_addresses]
+        remove_commands = [f"netsh interface ipv4 delete address \"Loopback Pseudo-Interface 1\" {ip}" for ip in ip_addresses]
+    
+    return setup_commands, remove_commands
+
+def setup_ip_aliases_func(ip_addresses):
+    """Set up IP aliases for direct device access."""
+    console.print("[yellow]Setting up IP aliases for Tasmota devices...[/yellow]")
+    
+    setup_commands, _ = get_ip_alias_commands(ip_addresses)
+    
+    success_count = 0
+    for i, (ip, cmd) in enumerate(zip(ip_addresses, setup_commands)):
+        try:
+            console.print(f"[cyan]Setting up alias for {ip}...[/cyan]")
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                success_count += 1
+                console.print(f"[green]✓[/green] IP alias {ip} created")
+            else:
+                console.print(f"[red]✗[/red] Failed to create alias {ip}: {result.stderr}")
+                
+        except Exception as e:
+            console.print(f"[red]✗[/red] Error creating alias {ip}: {e}")
+    
+    if success_count > 0:
+        console.print(f"\n[green]✓[/green] Created {success_count}/{len(ip_addresses)} IP aliases")
+        console.print("\n[cyan]You can now access devices directly:[/cyan]")
+        for i, ip in enumerate(ip_addresses):
+            device_name = f"kitchen_{i+1:03d}"
+            console.print(f"  • http://{ip} ({device_name})")
+        
+        console.print("\n[yellow]Example commands:[/yellow]")
+        console.print(f"  curl http://{ip_addresses[0]}")
+        console.print(f"  curl -u admin:test1234! 'http://{ip_addresses[0]}/cm?cmnd=Power%20ON'")
+        
+    return success_count == len(ip_addresses)
+
+def remove_ip_aliases(ip_addresses):
+    """Remove IP aliases."""
+    console.print("[yellow]Removing IP aliases for Tasmota devices...[/yellow]")
+    
+    _, remove_commands = get_ip_alias_commands(ip_addresses)
+    
+    success_count = 0
+    for ip, cmd in zip(ip_addresses, remove_commands):
+        try:
+            console.print(f"[cyan]Removing alias for {ip}...[/cyan]")
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                success_count += 1
+                console.print(f"[green]✓[/green] IP alias {ip} removed")
+            else:
+                # Some aliases might not exist, so we don't treat this as critical error
+                console.print(f"[yellow]•[/yellow] Alias {ip} was not active or already removed")
+                success_count += 1  # Count as success
+                
+        except Exception as e:
+            console.print(f"[red]✗[/red] Error removing alias {ip}: {e}")
+    
+    console.print(f"\n[green]✓[/green] Processed {success_count}/{len(ip_addresses)} IP aliases")
+    return True
+
+@cli.command("setup-ip-aliases")
+@click.option('--count', default=3, help='Number of IP aliases to create (starting from 172.25.0.100)')
+@click.option('--base-ip', default='172.25.0.100', help='Base IP address to start from')
+def setup_ip_aliases_cmd(count, base_ip):
+    """Set up IP aliases for direct device access."""
+    # Parse base IP and generate list
+    ip_parts = base_ip.split('.')
+    base_num = int(ip_parts[3])
+    ip_prefix = '.'.join(ip_parts[:3])
+    
+    ip_addresses = [f"{ip_prefix}.{base_num + i}" for i in range(count)]
+    
+    if setup_ip_aliases_func(ip_addresses):
+        console.print(f"\n[green]✓[/green] Successfully set up all IP aliases!")
+        console.print("[yellow]You can now start containers and access devices directly.[/yellow]")
+    else:
+        console.print(f"\n[red]✗[/red] Some IP aliases failed to set up. Check permissions.")
+
+@cli.command("remove-ip-aliases") 
+@click.option('--count', default=3, help='Number of IP aliases to remove (starting from 172.25.0.100)')
+@click.option('--base-ip', default='172.25.0.100', help='Base IP address to start from')
+def remove_ip_aliases_cmd(count, base_ip):
+    """Remove IP aliases for device access."""
+    # Parse base IP and generate list
+    ip_parts = base_ip.split('.')
+    base_num = int(ip_parts[3])
+    ip_prefix = '.'.join(ip_parts[:3])
+    
+    ip_addresses = [f"{ip_prefix}.{base_num + i}" for i in range(count)]
+    
+    if remove_ip_aliases(ip_addresses):
+        console.print(f"\n[green]✓[/green] Successfully removed IP aliases!")
+
 # Docker Management Commands
 @cli.command("create-devices")
-@click.option('--count', default=5, help='Number of device containers to create')
+@click.option('--count', default=3, help='Number of device containers to create')
 @click.option('--prefix', default='kitchen', help='Device name prefix')
 @click.option('--force', is_flag=True, help='Overwrite existing docker-compose.override.yml')
-def create_devices(count, prefix, force):
-    """Create multiple device containers."""
+@click.option('--setup-ip-aliases', is_flag=True, help='Automatically set up IP aliases for direct access')
+def create_devices(count, prefix, force, setup_ip_aliases):
+    """Create multiple device containers with optional IP alias setup."""
     override_file = Path("docker-compose.override.yml")
     
     if override_file.exists() and not force:
@@ -227,44 +338,18 @@ def create_devices(count, prefix, force):
     # Generate docker-compose override file
     services = {}
     base_ip = 100
+    ip_addresses = []
     
     for i in range(1, count + 1):
         device_id = f"{prefix}_{i:03d}"
         container_name = f"tasmota-device-{i}"
         ip_address = f"172.25.0.{base_ip + i - 1}"
-        
-        # Create a shell script that will run the Python code
-        python_cmd = f'''#!/bin/sh
-cat > /app/run_device.py << 'EOF'
-import asyncio
-import sys
-import threading
-
-# Add the app directory to Python path
-sys.path.insert(0, "/app")
-
-# Import required modules
-from tasmota_sim.device import create_and_start_device
-from tasmota_sim.web_server import app
-import uvicorn
-
-def run_web_server():
-    uvicorn.run(app, host="0.0.0.0", port=80)
-
-# Start web server in a separate thread
-threading.Thread(target=run_web_server, daemon=True).start()
-
-# Start device simulator
-asyncio.run(create_and_start_device("{device_id}", "{device_id}", "{ip_address}"))
-EOF
-
-chmod +x /app/run_device.py
-python3 /app/run_device.py
-'''
+        ip_addresses.append(ip_address)
         
         services[container_name] = {
             'build': '.',
             'container_name': container_name,
+            'command': 'python3 /app/run_device.py',
             'environment': [
                 'RABBITMQ_HOST=172.25.0.10',
                 'RABBITMQ_USER=admin',
@@ -274,29 +359,34 @@ python3 /app/run_device.py
                 f'IP_ADDRESS={ip_address}',
                 f'CONTAINER_IP={ip_address}',
                 'DEFAULT_USERNAME=admin',
-                'DEFAULT_PASSWORD=test1234!'
+                'DEFAULT_PASSWORD=test1234!',
+                'PORT=80'
             ],
-            'command': f'bash -c "{python_cmd}"',
             'networks': {
                 'tasmota_net': {
                     'ipv4_address': ip_address
                 }
             },
             'ports': [
-                f"{8080 + i}:80"  # Map container port 80 to host port 8080+i
+                f"{ip_address}:80:80",  # Direct IP access
+                f"{8080 + i}:80"        # Localhost port access
             ],
             'restart': 'unless-stopped'
         }
     
-    # Create complete docker-compose override structure
+    # Create complete docker-compose override structure  
     docker_compose = {
-        'services': services,
         'networks': {
             'tasmota_net': {
-                'name': 'tasmota-sim_tasmota_net',
-                'external': True
+                'driver': 'bridge',
+                'ipam': {
+                    'config': [
+                        {'subnet': '172.25.0.0/16'}
+                    ]
+                }
             }
-        }
+        },
+        'services': services
     }
     
     # Write the file
@@ -308,10 +398,25 @@ python3 /app/run_device.py
         console.print(f"[cyan]Device IDs:[/cyan] {prefix}_001 to {prefix}_{count:03d}")
         console.print(f"[cyan]IP Range:[/cyan] 172.25.0.{base_ip} to 172.25.0.{base_ip + count - 1}")
         console.print(f"[cyan]Web Ports:[/cyan] 8081 to {8080 + count}")
+        
+        # Setup IP aliases if requested
+        if setup_ip_aliases:
+            console.print(f"\n[yellow]Setting up IP aliases for direct access...[/yellow]")
+            setup_success = setup_ip_aliases_func(ip_addresses)
+            if setup_success:
+                console.print(f"[green]✓[/green] IP aliases configured successfully!")
+            else:
+                console.print(f"[yellow]⚠[/yellow] Some IP aliases failed. You can run 'tasmota-sim setup-ip-aliases --count {count}' later.")
+        
         console.print("\n[yellow]Next steps:[/yellow]")
-        console.print("1. Start services: [cyan]tasmota-sim docker-up[/cyan]")
-        console.print("2. Test devices: [cyan]tasmota-sim status kitchen_001[/cyan]")
-        console.print("3. Test web interface: [cyan]http://localhost:8081/cm?cmnd=Power%20TOGGLE[/cyan]")
+        if not setup_ip_aliases:
+            console.print(f"1. Setup IP aliases: [cyan]tasmota-sim setup-ip-aliases --count {count}[/cyan]")
+            console.print("2. Start services: [cyan]docker-compose up -d[/cyan]")
+        else:
+            console.print("1. Start services: [cyan]docker-compose up -d[/cyan]")
+        console.print("3. Test devices: [cyan]tasmota-sim status kitchen_001[/cyan]")
+        console.print(f"4. Test web interface: [cyan]http://{ip_addresses[0]}/docs[/cyan]")
+        console.print(f"5. Test direct IP access: [cyan]curl http://{ip_addresses[0]}[/cyan]")
         
     except Exception as e:
         console.print(f"[red]✗[/red] Failed to create {override_file}: {e}")
