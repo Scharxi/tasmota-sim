@@ -12,6 +12,7 @@ tasmota_sim/legacy_models.py
 tasmota_sim/main.py
 tasmota_sim/messaging.py
 tasmota_sim/models.py
+tasmota_sim/power_profiles.py
 tasmota_sim/web_server.py
 tasmota_sim.egg-info/PKG-INFO
 tasmota_sim.egg-info/SOURCES.txt
