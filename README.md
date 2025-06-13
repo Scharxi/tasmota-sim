@@ -6,10 +6,13 @@ Ein umfassendes Simulationssystem für Tasmota Smart Plugs mit RabbitMQ-Messagin
 
 ### Option 1: Web-Server + Direkte IP-Steuerung (Neu & Empfohlen)
 
-**Schritt 1: IP-Aliase einrichten (einmalig)**
+**Schritt 1: Devices erstellen & IP-Aliase einrichten**
 ```bash
-# IP-Aliase für direkte Device-Zugriffe erstellen
-./setup-ip-aliases.sh
+# CLI installieren (falls noch nicht geschehen)
+pip install -e .
+
+# Devices erstellen mit automatischen IP-Aliases
+tasmota-sim create-devices --count 3 --setup-ip-aliases
 ```
 
 **Schritt 2: Container starten**
@@ -155,7 +158,9 @@ curl -u admin:test1234! "http://172.25.0.100/cm?cmnd=Power%20TOGGLE"
 
 | Befehl | Beschreibung | Beispiel |
 |--------|--------------|----------|
-| `create-devices` | Erstellt mehrere Device-Container | `tasmota-sim create-devices --count 5` |
+| `create-devices` | Erstellt Device-Container (mit IP-Alias Option) | `tasmota-sim create-devices --count 3 --setup-ip-aliases` |
+| `setup-ip-aliases` | Erstellt IP-Aliase für direkten Zugriff | `tasmota-sim setup-ip-aliases --count 3` |
+| `remove-ip-aliases` | Entfernt IP-Aliase | `tasmota-sim remove-ip-aliases --count 3` |
 | `status` | Fragt Gerätestatus ab | `tasmota-sim status kitchen_001` |
 | `power` | Schaltet Gerät ein/aus | `tasmota-sim power kitchen_001 on` |
 | `energy` | Fragt Energiedaten ab | `tasmota-sim energy kitchen_001` |
@@ -252,17 +257,18 @@ open http://172.25.0.100/docs
 # 1. CLI installieren
 pip install -e .
 
-# 2. Services starten
-docker-compose -f docker-compose.services.yml up -d
+# 2. Geräte erstellen (mit automatischen IP-Aliases)
+tasmota-sim create-devices --count 3 --setup-ip-aliases
 
-# 3. 5 Geräte erstellen
-tasmota-sim create-devices --count 5
+# 3. Services starten
+docker-compose up -d
 
-# 4. Geräte starten
-docker-compose -f docker-compose.override.yml up -d
-
-# 5. Geräte testen
+# 4. Geräte testen
 tasmota-sim status kitchen_001
+
+# Oder IP-Aliases manuell verwalten:
+tasmota-sim setup-ip-aliases --count 3     # Erstellen
+tasmota-sim remove-ip-aliases --count 3    # Entfernen
 ```
 
 ### Erweiterte Web-Server-Nutzung
