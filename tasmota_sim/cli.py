@@ -18,6 +18,7 @@ from .messaging import AsyncTasmotaMessaging
 from .database import TasmotaDatabase
 from .docker_generator import DockerComposeGenerator
 from .models import Device, Container
+from .power_profiles import power_profile_manager, DeviceCategory
 
 console = Console()
 
@@ -858,6 +859,172 @@ def list_rooms(ctx):
         
     except Exception as e:
         console.print(f"[red]✗[/red] Error listing rooms: {e}")
+
+# Power Profile Management Commands
+@cli.command("list-power-profiles")
+def list_power_profiles():
+    """List all available power consumption profiles."""
+    try:
+        profiles = power_profile_manager.list_available_profiles()
+        
+        if not profiles:
+            console.print("[yellow]No power profiles available[/yellow]")
+            return
+        
+        console.print(f"[green]Available Power Profiles ({len(profiles)} total):[/green]")
+        
+        table = Table()
+        table.add_column("Profile Name")
+        table.add_column("Category")
+        table.add_column("Description")
+        table.add_column("Power Range (W)")
+        table.add_column("Standby (W)")
+        table.add_column("Features")
+        
+        for profile in profiles:
+            features = []
+            if profile['has_cycling']:
+                features.append("🔄 Cycling")
+            if profile['time_dependent']:
+                features.append("🕐 Time-dependent")
+            if profile['seasonal_dependent']:
+                features.append("🌡️ Seasonal")
+            
+            feature_text = " ".join(features) if features else "-"
+            
+            table.add_row(
+                profile['name'],
+                profile['category'].title(),
+                profile['description'],
+                f"{profile['min_watts']:.0f}-{profile['max_watts']:.0f}",
+                f"{profile['standby_watts']:.1f}",
+                feature_text
+            )
+        
+        console.print(table)
+        
+        console.print("\n[cyan]Features Legend:[/cyan]")
+        console.print("🔄 Cycling: Device power cycles on/off automatically")
+        console.print("🕐 Time-dependent: Power varies by time of day")
+        console.print("🌡️ Seasonal: Power varies by season/month")
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error listing power profiles: {e}")
+
+@cli.command("device-power-info")
+@click.argument('device_id')
+def device_power_info(device_id):
+    """Show detailed power information for a specific device."""
+    try:
+        device_info = power_profile_manager.get_device_info(device_id)
+        
+        console.print(f"[green]Power Information for Device: {device_id}[/green]")
+        
+        table = Table()
+        table.add_column("Property")
+        table.add_column("Value")
+        
+        table.add_row("Profile Name", device_info['profile_name'])
+        table.add_row("Category", device_info['profile_category'].title())
+        table.add_row("Description", device_info['profile_description'])
+        table.add_row("Power State", "ON" if device_info['power_state'] else "OFF")
+        table.add_row("Current Power", f"{device_info['current_watts']:.1f} W")
+        table.add_row("Total Energy", f"{device_info['total_energy_kwh']:.3f} kWh")
+        table.add_row("Power Range", f"{device_info['min_watts']:.0f}-{device_info['max_watts']:.0f} W")
+        table.add_row("Standby Power", f"{device_info['standby_watts']:.1f} W")
+        
+        features = []
+        if device_info['has_cycling']:
+            features.append("Cycling")
+        if device_info['time_dependent']:
+            features.append("Time-dependent")
+        if device_info['seasonal_dependent']:
+            features.append("Seasonal")
+        
+        table.add_row("Features", ", ".join(features) if features else "None")
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error getting device power info: {e}")
+
+@cli.command("assign-power-profile")
+@click.argument('device_id')
+@click.option('--profile-name', help='Specific power profile name to assign')
+@click.option('--category', type=click.Choice([cat.value for cat in DeviceCategory]), help='Device category')
+def assign_power_profile(device_id, profile_name, category):
+    """Assign a power profile to a device."""
+    try:
+        device_category = DeviceCategory(category) if category else None
+        
+        profile = power_profile_manager.assign_profile_to_device(
+            device_id, 
+            profile_name=profile_name, 
+            category=device_category
+        )
+        
+        console.print(f"[green]✓[/green] Assigned power profile to device {device_id}")
+        console.print(f"Profile: {profile.name} ({profile.category.value})")
+        console.print(f"Description: {profile.description}")
+        console.print(f"Power Range: {profile.base_watts_min:.0f}-{profile.base_watts_max:.0f}W")
+        console.print(f"Standby: {profile.standby_watts:.1f}W")
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error assigning power profile: {e}")
+
+@cli.command("simulate-power-usage")
+@click.argument('device_id')
+@click.option('--duration', default=60, help='Simulation duration in seconds')
+@click.option('--interval', default=5, help='Update interval in seconds')
+def simulate_power_usage(device_id, duration, interval):
+    """Simulate and display power usage for a device over time."""
+    import time as time_module
+    
+    try:
+        console.print(f"[yellow]Simulating power usage for device {device_id}...[/yellow]")
+        console.print(f"Duration: {duration}s, Update interval: {interval}s")
+        console.print("[dim]Press Ctrl+C to stop early[/dim]\n")
+        
+        device_info = power_profile_manager.get_device_info(device_id)
+        console.print(f"Device Profile: {device_info['profile_name']} ({device_info['profile_category']})")
+        console.print(f"Description: {device_info['profile_description']}\n")
+        
+        start_time = time_module.time()
+        last_energy = device_info['total_energy_kwh']
+        
+        try:
+            while (time_module.time() - start_time) < duration:
+                # Get current power consumption
+                current_power = power_profile_manager.get_device_power_consumption(device_id)
+                current_energy = power_profile_manager.get_device_total_energy(device_id)
+                
+                # Calculate energy consumed during this simulation
+                energy_delta = current_energy - last_energy
+                
+                # Display current status
+                elapsed = time_module.time() - start_time
+                console.print(f"[{elapsed:6.1f}s] Power: [yellow]{current_power:6.1f}W[/yellow] | "
+                            f"Total Energy: [blue]{current_energy:.4f}kWh[/blue] | "
+                            f"Session Δ: [green]{energy_delta:.6f}kWh[/green]")
+                
+                time_module.sleep(interval)
+                
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Simulation stopped by user[/yellow]")
+        
+        # Final summary
+        final_energy = power_profile_manager.get_device_total_energy(device_id)
+        total_energy_used = final_energy - last_energy
+        elapsed_hours = (time_module.time() - start_time) / 3600
+        avg_power = (total_energy_used / elapsed_hours * 1000) if elapsed_hours > 0 else 0
+        
+        console.print(f"\n[green]Simulation Summary:[/green]")
+        console.print(f"Duration: {time_module.time() - start_time:.1f}s")
+        console.print(f"Energy consumed: {total_energy_used:.6f}kWh")
+        console.print(f"Average power: {avg_power:.1f}W")
+        
+    except Exception as e:
+        console.print(f"[red]✗[/red] Error simulating power usage: {e}")
 
 @cli.command("docker-logs")
 @click.argument('service', required=False)
