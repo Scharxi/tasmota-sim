@@ -233,6 +233,35 @@ def create_devices(count, prefix, force):
         container_name = f"tasmota-device-{i}"
         ip_address = f"172.25.0.{base_ip + i - 1}"
         
+        # Create a shell script that will run the Python code
+        python_cmd = f'''#!/bin/sh
+cat > /app/run_device.py << 'EOF'
+import asyncio
+import sys
+import threading
+
+# Add the app directory to Python path
+sys.path.insert(0, "/app")
+
+# Import required modules
+from tasmota_sim.device import create_and_start_device
+from tasmota_sim.web_server import app
+import uvicorn
+
+def run_web_server():
+    uvicorn.run(app, host="0.0.0.0", port=80)
+
+# Start web server in a separate thread
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# Start device simulator
+asyncio.run(create_and_start_device("{device_id}", "{device_id}", "{ip_address}"))
+EOF
+
+chmod +x /app/run_device.py
+python3 /app/run_device.py
+'''
+        
         services[container_name] = {
             'build': '.',
             'container_name': container_name,
@@ -242,25 +271,30 @@ def create_devices(count, prefix, force):
                 'RABBITMQ_PASS=admin123',
                 f'DEVICE_ID={device_id}',
                 f'DEVICE_NAME={device_id}',
-                f'IP_ADDRESS={ip_address}'
+                f'IP_ADDRESS={ip_address}',
+                f'CONTAINER_IP={ip_address}',
+                'DEFAULT_USERNAME=admin',
+                'DEFAULT_PASSWORD=test1234!'
             ],
-            'command': f'python3 -c "import asyncio, sys; sys.path.insert(0, \\"/app\\\"); from tasmota_sim.device import create_and_start_device; asyncio.run(create_and_start_device(\\\"{device_id}\\\", \\\"{device_id}\\\", \\\"{ip_address}\\\"))"',
+            'command': f'bash -c "{python_cmd}"',
             'networks': {
                 'tasmota_net': {
                     'ipv4_address': ip_address
                 }
             },
+            'ports': [
+                f"{8080 + i}:80"  # Map container port 80 to host port 8080+i
+            ],
             'restart': 'unless-stopped'
         }
     
-    # Create complete docker-compose override structure (without version and depends_on)
+    # Create complete docker-compose override structure
     docker_compose = {
         'services': services,
         'networks': {
             'tasmota_net': {
-                'external': {
-                    'name': 'tasmota-sim_tasmota_net'
-                }
+                'name': 'tasmota-sim_tasmota_net',
+                'external': True
             }
         }
     }
@@ -273,9 +307,11 @@ def create_devices(count, prefix, force):
         console.print(f"[green]✓[/green] Created {override_file} with {count} device containers")
         console.print(f"[cyan]Device IDs:[/cyan] {prefix}_001 to {prefix}_{count:03d}")
         console.print(f"[cyan]IP Range:[/cyan] 172.25.0.{base_ip} to 172.25.0.{base_ip + count - 1}")
+        console.print(f"[cyan]Web Ports:[/cyan] 8081 to {8080 + count}")
         console.print("\n[yellow]Next steps:[/yellow]")
         console.print("1. Start services: [cyan]tasmota-sim docker-up[/cyan]")
         console.print("2. Test devices: [cyan]tasmota-sim status kitchen_001[/cyan]")
+        console.print("3. Test web interface: [cyan]http://localhost:8081/cm?cmnd=Power%20TOGGLE[/cyan]")
         
     except Exception as e:
         console.print(f"[red]✗[/red] Failed to create {override_file}: {e}")
