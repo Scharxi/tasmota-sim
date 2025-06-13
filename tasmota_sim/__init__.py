@@ -1,8 +1,5 @@
 """
-Tasmota Simulator Package
-
-A Python application for simulating Tasmota smart plugs using RabbitMQ for communication.
-Each simulated device gets its own IP address within a Docker network.
+Tasmota Simulator - A Python implementation of Tasmota's web interface.
 """
 
 __version__ = "1.0.0"
