@@ -60,7 +60,6 @@ class DockerComposeGenerator:
             services[container.docker_service_name] = service.to_compose_dict()
         
         return {
-            "version": "3.8",
             "services": services,
             "networks": {
                 "tasmota_net": {
@@ -74,13 +73,15 @@ class DockerComposeGenerator:
                         ]
                     }
                 }
+            },
+            "volumes": {
+                "rabbitmq_data": None
             }
         }
     
     def _create_minimal_override(self, output_path: str):
         """Create minimal override file when no devices exist."""
         minimal_config = {
-            "version": "3.8",
             "services": {},
             "networks": {
                 "tasmota_net": {
@@ -94,6 +95,9 @@ class DockerComposeGenerator:
                         ]
                     }
                 }
+            },
+            "volumes": {
+                "rabbitmq_data": None
             }
         }
         
@@ -106,10 +110,7 @@ class DockerComposeGenerator:
             with open(file_path, 'r') as f:
                 config = yaml.safe_load(f)
             
-            # Basic validation
-            if 'version' not in config:
-                print("Missing version in docker-compose file")
-                return False
+            # Basic validation (version is no longer required)
             
             if 'services' not in config:
                 print("Missing services in docker-compose file")
