@@ -100,7 +100,7 @@ class AsyncTasmotaMessaging:
         logger.debug("RabbitMQ exchanges and queues setup completed")
 
     async def setup_device_queue(self, device_id: str, callback):
-        """Setup device-specific command queue."""
+        """Setup device-specific command queue and start consuming."""
         if not self.channel:
             logger.error("Not connected to RabbitMQ")
             return False
@@ -118,7 +118,35 @@ class AsyncTasmotaMessaging:
             routing_key = f"device.command.{device_id}"
             await self.device_queue.bind(self.command_exchange, routing_key)
 
-            logger.info(f"Setup command queue for device {device_id}")
+            # Setup message handler
+            async def message_handler(message: aio_pika.IncomingMessage):
+                async with message.process():
+                    try:
+                        # Parse command message
+                        data = json.loads(message.body.decode())
+                        command = CommandMessage(**data)
+                        logger.info(f"Message received for device {device_id}: {command.command}")
+                        
+                        # Check if callback is async or sync
+                        if asyncio.iscoroutinefunction(callback):
+                            logger.info(f"Calling async callback for device {device_id}")
+                            await callback(command)
+                        else:
+                            # Execute sync callback in thread pool to avoid blocking
+                            logger.info(f"Calling sync callback for device {device_id}")
+                            loop = asyncio.get_running_loop()
+                            await loop.run_in_executor(None, callback, command)
+                        
+                        logger.info(f"Processed command {command.command} for device {device_id}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing command message for device {device_id}: {e}")
+
+            # Start consuming messages immediately
+            await self.device_queue.consume(message_handler)
+            self._is_consuming = True
+
+            logger.info(f"Setup command queue and started consuming for device {device_id}")
             return True
 
         except Exception as e:
@@ -137,16 +165,19 @@ class AsyncTasmotaMessaging:
                     # Parse command message
                     data = json.loads(message.body.decode())
                     command = CommandMessage(**data)
+                    logger.info(f"Parsed command: {command.command} for device: {command.device_id}")
                     
                     # Check if callback is async or sync
                     if asyncio.iscoroutinefunction(callback):
+                        logger.info(f"Calling async callback for command: {command.command}")
                         await callback(command)
                     else:
                         # Execute sync callback in thread pool to avoid blocking
+                        logger.info(f"Calling sync callback for command: {command.command}")
                         loop = asyncio.get_running_loop()
                         await loop.run_in_executor(None, callback, command)
                     
-                    logger.debug(f"Processed command: {command.command}")
+                    logger.info(f"Processed command: {command.command}")
                     
                 except Exception as e:
                     logger.error(f"Error processing command message: {e}")
@@ -178,7 +209,7 @@ class AsyncTasmotaMessaging:
             )
             
             await self.status_exchange.publish(message, routing_key)
-            logger.debug(f"Published status for device {device_id}")
+            logger.info(f"Published status for device {device_id}")
             return True
             
         except Exception as e:
@@ -203,7 +234,7 @@ class AsyncTasmotaMessaging:
             )
             
             await self.telemetry_exchange.publish(message, routing_key)
-            logger.debug(f"Published telemetry for device {device_id}")
+            logger.info(f"Published telemetry for device {device_id}")
             return True
             
         except Exception as e:

@@ -47,14 +47,14 @@ tasmota-sim power kitchen_001 off
 tasmota-sim energy kitchen_001
 ```
 
-### Option 2: Alles in Docker (Original)
+### Option 2: Legacy Docker-Compose (Optional)
 
 ```bash
-# Alle Services inklusive CLI-Container
-docker-compose up -d
+# Nur für Kompatibilität - verwendet docker-compose.yml
+docker-compose up -d rabbitmq
 
-# CLI im Container verwenden
-docker-compose run --rm tasmota-cli python -m tasmota_sim.cli --help
+# Dann lokale CLI nutzen (empfohlen)
+tasmota-sim --help
 ```
 
 ## 🏗️ Architektur
@@ -83,7 +83,11 @@ docker-compose run --rm tasmota-cli python -m tasmota_sim.cli --help
 | `monitor` | Echzeit-Monitoring* | `tasmota-sim monitor` |
 | `docker-up` | Startet Docker Services | `tasmota-sim docker-up` |
 | `docker-down` | Stoppt Docker Services | `tasmota-sim docker-down` |
-| `list-devices` | Listet Device-Container | `tasmota-sim list-devices` |
+| `docker-restart` | Startet Services neu | `tasmota-sim docker-restart --all` |
+| `docker-logs` | Zeigt Service-Logs | `tasmota-sim docker-logs rabbitmq -f` |
+| `docker-clean` | Bereinigt Docker-Ressourcen | `tasmota-sim docker-clean` |
+| `docker-status` | Zeigt Container-Status | `tasmota-sim docker-status` |
+| `list-devices` | Listet Device-Container | `tasmota-sim list-devices --status` |
 
 *Monitoring-Feature wird noch implementiert
 
@@ -149,8 +153,17 @@ for i in {001..005}; do
     tasmota-sim energy kitchen_$i
 done
 
-# Services überwachen
-docker-compose logs -f
+# Docker Services verwalten
+tasmota-sim docker-status                    # Status aller Container
+tasmota-sim docker-logs rabbitmq -f         # RabbitMQ-Logs verfolgen
+tasmota-sim docker-logs --all               # Alle Service-Logs
+tasmota-sim docker-restart tasmota-device-1 # Einzelnen Container neu starten
+tasmota-sim docker-restart --all            # Alle Services neu starten
+tasmota-sim list-devices --status           # Device-Container-Status
+
+# Cleanup und Wartung
+tasmota-sim docker-clean                    # Aufräumen
+tasmota-sim docker-down -v                  # Alles stoppen + Volumes löschen
 ```
 
 ## 📊 Features
@@ -195,10 +208,33 @@ docker-compose -f docker-compose.services.yml restart rabbitmq
 **Devices starten nicht**
 ```bash
 # Device-Logs prüfen
-docker-compose logs tasmota-device-1
+tasmota-sim docker-logs tasmota-device-1
+
+# Container-Status prüfen
+tasmota-sim list-devices --status
+
+# Einzelnen Container neu starten
+tasmota-sim docker-restart tasmota-device-1
 
 # Alle Services neu starten
-docker-compose down && docker-compose up -d
+tasmota-sim docker-down && tasmota-sim docker-up
+```
+
+**Docker-Probleme beheben**
+```bash
+# Container-Status überprüfen
+tasmota-sim docker-status
+
+# Alle Logs anzeigen
+tasmota-sim docker-logs --all
+
+# Docker-Ressourcen bereinigen
+tasmota-sim docker-clean
+
+# Kompletter Neustart mit Cleanup
+tasmota-sim docker-down -v
+tasmota-sim docker-clean --force
+tasmota-sim docker-up
 ```
 
 ## 📦 Installation Details
