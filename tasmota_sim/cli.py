@@ -50,8 +50,10 @@ async def status(device_id, no_wait):
             # By default, always wait for response unless --no-wait is specified
             wait_for_response = not no_wait
             
+            success = await messaging.send_command(device_id, 'status', {})
+            
             if wait_for_response:
-                # Set up listener for response
+                # Set up listener for response after sending command
                 response_received = asyncio.Event()
                 response_data = {}
                 
@@ -60,10 +62,8 @@ async def status(device_id, no_wait):
                         response_data.update(data)
                         response_received.set()
                 
-                # Start listening
+                # Start listening 
                 await messaging.setup_response_listener(response_handler)
-            
-            success = await messaging.send_command(device_id, 'status', {})
             
             if success:
                 console.print(f"[green]✓[/green] Requested status from device [cyan]{device_id}[/cyan]")
@@ -154,8 +154,10 @@ async def energy(device_id, no_wait):
             # By default, always wait for response unless --no-wait is specified
             wait_for_response = not no_wait
             
+            success = await messaging.send_command(device_id, 'energy', {})
+            
             if wait_for_response:
-                # Set up listener for response
+                # Set up listener for response after sending command
                 response_received = asyncio.Event()
                 response_data = {}
                 
@@ -166,8 +168,6 @@ async def energy(device_id, no_wait):
                 
                 # Start listening
                 await messaging.setup_response_listener(response_handler)
-            
-            success = await messaging.send_command(device_id, 'energy', {})
             
             if success:
                 console.print(f"[green]✓[/green] Requested energy data from device [cyan]{device_id}[/cyan]")
