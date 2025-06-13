@@ -1,21 +1,27 @@
-FROM python:3.11-slim
+FROM python:3.9-slim
 
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
-    netcat-openbsd \
+    netcat-traditional \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Create entrypoint script
-RUN chmod +x entrypoint.sh
+# Install the package in development mode
+RUN pip install --no-cache-dir -e .
 
-CMD ["./entrypoint.sh"] 
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Expose the web server port
+EXPOSE 80
+
+# The command will be provided by docker-compose
+CMD ["python3", "-c", "print('Container ready')"] 
