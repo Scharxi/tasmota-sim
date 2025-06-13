@@ -3,8 +3,12 @@ setup.py
 tasmota_sim/__init__.py
 tasmota_sim/__main__.py
 tasmota_sim/cli.py
+tasmota_sim/container_main.py
+tasmota_sim/database.py
 tasmota_sim/device.py
 tasmota_sim/device_main.py
+tasmota_sim/docker_generator.py
+tasmota_sim/legacy_models.py
 tasmota_sim/main.py
 tasmota_sim/messaging.py
 tasmota_sim/models.py
