@@ -1,81 +1,96 @@
+#!/usr/bin/env python3
 """
-Pydantic models for Tasmota device simulation.
+Data models for Tasmota Device Simulator.
 """
 
-from pydantic import BaseModel, Field
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
-from enum import Enum
+from datetime import datetime
 
 
-class DeviceState(str, Enum):
-    """Device power states."""
-    ON = "ON"
-    OFF = "OFF"
+@dataclass
+class Device:
+    """Represents a Tasmota device."""
+    id: str
+    name: str
+    room: Optional[str] = None
+    device_type: str = "switch"
+    ip_address: Optional[str] = None
+    port: int = 80
+    prefix: str = "kitchen"
+    status: str = "offline"
+    config: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[str] = None
+    last_seen: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now().isoformat()
 
 
-class TasmotaDeviceConfig(BaseModel):
-    """Configuration for a Tasmota device."""
-    device_id: str = Field(..., description="Unique device identifier")
-    device_name: str = Field(..., description="Human-readable device name")
-    ip_address: str = Field(..., description="IP address of the device")
-    firmware_version: str = Field(default="12.5.0", description="Tasmota firmware version")
-    power_state: bool = Field(default=False, description="Current power state")
-    energy_consumption: float = Field(default=0.0, description="Current power consumption in watts")
-    total_energy: float = Field(default=0.0, description="Total energy consumed in kWh")
-    rabbitmq_host: str = Field(default="localhost", description="RabbitMQ host")
-    rabbitmq_user: str = Field(default="admin", description="RabbitMQ user")
-    rabbitmq_pass: str = Field(default="admin123", description="RabbitMQ password")
-
-
-class TasmotaMessage(BaseModel):
-    """Base message structure for Tasmota communication."""
-    device_id: str = Field(..., description="Device identifier")
-    command: str = Field(..., description="Command type")
-    payload: Dict[str, Any] = Field(default_factory=dict, description="Command payload")
-    timestamp: Optional[str] = Field(default=None, description="Message timestamp")
-
-
-class CommandMessage(BaseModel):
-    """Command message structure for device communication."""
-    device_id: str = Field(..., description="Device identifier")
-    command: str = Field(..., description="Command type")
-    payload: Dict[str, Any] = Field(default_factory=dict, description="Command payload")
-    timestamp: str = Field(..., description="Message timestamp")
-
-
-class PowerCommand(BaseModel):
-    """Power control command."""
-    action: DeviceState = Field(..., description="Power action to perform")
-
-
-class StatusResponse(BaseModel):
-    """Device status response."""
+@dataclass 
+class Container:
+    """Represents a Docker container mapping for a device."""
     device_id: str
-    device_name: str
+    container_name: str
+    docker_service_name: str
+    host_port: int
+    device_name: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now().isoformat()
+
+
+@dataclass
+class DeviceStatus:
+    """Represents device status/telemetry data."""
+    device_id: str
+    power_state: bool
+    energy_consumption: Optional[float] = None
+    total_energy: Optional[float] = None
+    voltage: Optional[float] = None
+    current: Optional[float] = None
+    timestamp: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now().isoformat()
+
+
+@dataclass
+class DockerComposeService:
+    """Represents a service definition for docker-compose."""
+    name: str
+    device_id: str
     ip_address: str
-    power_state: bool
-    energy_consumption: float
-    total_energy: float
-    firmware_version: str
-    uptime: int
-    wifi_signal: int = Field(default=-45, description="WiFi signal strength in dBm")
-
-
-class TelemetryData(BaseModel):
-    """Telemetry data from device."""
-    device_id: str
-    power_state: bool
-    energy: Dict[str, float] = Field(
-        default_factory=lambda: {
-            "power": 0.0,
-            "apparent_power": 0.0,
-            "reactive_power": 0.0,
-            "factor": 1.0,
-            "voltage": 230.0,
-            "current": 0.0,
-            "total": 0.0,
-            "today": 0.0,
-            "yesterday": 0.0
-        }
-    )
-    timestamp: str 
+    host_port: int
+    environment: Dict[str, str] = field(default_factory=dict)
+    
+    def to_compose_dict(self) -> Dict[str, Any]:
+        """Convert to docker-compose service definition."""
+        return {
+            "image": "tasmota-sim",
+            "container_name": f"tasmota-device-{self.name}",
+            "command": "python3 /app/run_device.py",
+            "environment": {
+                "DEVICE_ID": self.device_id,
+                "DEVICE_NAME": self.name,
+                "DEVICE_IP": self.ip_address,
+                "AMQP_URL": "amqp://guest:guest@rabbitmq:5672/",
+                **self.environment
+            },
+            "ports": [
+                f"{self.ip_address}:80:80",
+                f"127.0.0.1:{self.host_port}:80"
+            ],
+            "networks": {
+                "tasmota_net": {
+                    "ipv4_address": self.ip_address
+                }
+            },
+            "depends_on": ["rabbitmq"],
+            "restart": "unless-stopped"
+        } 
